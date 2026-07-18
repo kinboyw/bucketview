@@ -27,14 +27,17 @@ jobs:
             os: windows-2022
             command: npm run build:win
             artifact: bucketview-windows-x64
+            manifest: latest-win32.yml
           - name: macOS Intel
             os: macos-15-intel
             command: npm run build:mac
             artifact: bucketview-macos-x64
+            manifest: latest-darwin.yml
           - name: Linux x64
             os: ubuntu-latest
             command: npm run build:linux
             artifact: bucketview-linux-x64
+            manifest: latest-linux.yml
 
     steps:
       - name: Checkout
@@ -76,7 +79,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             release/*.zip
-            release/latest-*.yml
+            release/${{ matrix.manifest }}
           if-no-files-found: error
           retention-days: 7
 
