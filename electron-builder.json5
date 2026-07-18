@@ -1,0 +1,69 @@
+/**
+ * @see https://www.electron.build/configuration/configuration
+ * 修改了此配置可能需要修改 generate-latest-yml.js
+ */
+{
+  "appId": "app.bucketview.desktop",
+  "asar": true,
+  "asarUnpack": [
+    "**/node_modules/better-sqlite3/**/*",
+    "**/node_modules/bindings/**/*",
+    "**/node_modules/file-uri-to-path/**/*",
+    "**/node_modules/node-addon-api/**/*",
+    "**/node_modules/koffi/**/*"
+  ],
+  "npmRebuild": false,
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist-electron",
+    "dist"
+  ],
+  "afterAllArtifactBuild":"./generate-latest-yml.js",
+  "mac": {
+    "icon": "public/favicon.icns",
+    "artifactName": "BucketView_${version}_darwin_${arch}.zip",
+    "extraResources": [{"from":"bin/rclone-darwin-${arch}", "to":"bin/rclone-darwin-${arch}"}, {"from":"bin/autoUpdater-darwin-${arch}", "to":"bin/autoUpdater-darwin-${arch}"}],
+    "target": [
+      {
+        "target": "zip",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+  },
+  "win": {
+    "icon": "public/favicon.ico",
+    "extraResources": [{"from":"bin/rclone-win32-${arch}.exe", "to":"bin/rclone-win32-${arch}.exe"}, {"from":"bin/autoUpdater-win32-${arch}.exe", "to":"bin/autoUpdater-win32-${arch}.exe"}],
+    "target": [
+      {
+        "target": "zip",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "artifactName": "BucketView_${version}_win32_${arch}.zip"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false
+  },
+  "linux": {
+    "icon": "public/favicon.png",
+    "artifactName": "BucketView_${version}_linux_${arch}.zip",
+    "extraResources": [{"from":"bin/rclone-linux-${arch}", "to":"bin/rclone-linux-${arch}"}],
+    "target": [
+      {
+        "target": "zip",
+        "arch": [
+          "x64"
+        ]
+      }
+    ]
+  }
+}

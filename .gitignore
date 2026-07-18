@@ -1,0 +1,47 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+dist-electron
+release
+*.local
+
+# Editor directories and files
+.vscode/.debug.env
+.claude/
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Use package-lock.json for reproducible npm installs.
+pnpm-lock.yaml
+yarn.lock
+
+*.sqlite
+*.sqlite-*
+bin/*
+!bin/rclone-darwin-x64
+!bin/rclone-win32-x64.exe
+!bin/autoUpdater-darwin-x64
+!bin/autoUpdater-win32-x64.exe
+
+# Local AI/editor state
+.agents/
+.antigravitycli/
+.codex/
+
+# Local scratch files
+ocr_pdf_to_word.py
+temp_ocr/

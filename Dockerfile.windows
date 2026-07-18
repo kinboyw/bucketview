@@ -1,0 +1,11 @@
+# 编译windows版本
+FROM electronuserland/builder:18-wine
+
+ENV ELECTRON_MIRROR=https://repo.huaweicloud.com/electron/
+ENV ELECTRON_BUILDER_BINARIES_MIRROR=http://npm.taobao.org/mirrors/electron-builder-binaries/
+RUN npm config set electron_mirror "https://npm.taobao.org/mirrors/electron/"
+
+COPY . /project/
+WORKDIR /project/
+RUN npm install -g npm@^9
+RUN npm i && npm run build:win

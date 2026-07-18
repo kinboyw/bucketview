@@ -1,0 +1,8 @@
+node_modules
+dist
+dist-ssr
+dist-electron
+release
+*.local
+package-lock.json
+Dockerfile.*

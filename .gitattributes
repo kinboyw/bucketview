@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+*.exe -text
+bin/* -text
+*.ico -text
+*.icns -text
+*.png -text
