@@ -1,240 +1,218 @@
 import { WebContents, app } from 'electron';
 import { Platform, sleep } from '../common';
 import axios from 'axios';
-import YAML from 'yaml'
-import semver from "semver";
+import YAML from 'yaml';
+import semver from 'semver';
 import { DownloaderHelper } from 'node-downloader-helper';
-import { UpdateInfo } from '../preload/types';
-import nodePath from "node:path";
-import nodeOs from "node:os";
-import nodeFs from "node:fs";
-import nodeProcess from "node:child_process";
+import type { UpdateFile, UpdateInfo } from '../preload/types';
+import nodeCrypto from 'node:crypto';
+import nodePath from 'node:path';
+import nodeOs from 'node:os';
+import nodeFs from 'node:fs';
+import nodeProcess from 'node:child_process';
 
-// electron-updater 和 electron 自带的autoUpdater都需要签名才能自动更新，只能自己实现一个
+const DEFAULT_UPDATE_FEED_URL = 'https://github.com/kinboyw/bucketview/releases/latest/download';
+const AUTO_INSTALL_PLATFORMS = new Set<NodeJS.Platform>(['win32', 'darwin']);
+
+interface PendingUpdate {
+  version: string;
+  fileName: string;
+  feedURL: string;
+  sha512: string;
+  size: number;
+  downloadPath?: string;
+}
+
+const getErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+const normalizeFeedURL = (feedURL: string) => feedURL.trim().replace(/\/+$/, '');
+
+const isUpdateFile = (value: unknown): value is UpdateFile => {
+  if (!value || typeof value !== 'object') return false;
+  const file = value as Partial<UpdateFile>;
+  return typeof file.name === 'string'
+    && typeof file.arch === 'string'
+    && typeof file.sha512 === 'string'
+    && /^[a-f0-9]{128}$/i.test(file.sha512)
+    && typeof file.size === 'number'
+    && Number.isFinite(file.size)
+    && file.size > 0;
+};
+
+const isUpdateInfo = (value: unknown): value is UpdateInfo => {
+  if (!value || typeof value !== 'object') return false;
+  const info = value as Partial<UpdateInfo>;
+  return typeof info.version === 'string'
+    && semver.valid(info.version) !== null
+    && Array.isArray(info.files)
+    && info.files.every(isUpdateFile);
+};
+
+const calculateSha512 = (filePath: string) => new Promise<string>((resolve, reject) => {
+  const hash = nodeCrypto.createHash('sha512');
+  const stream = nodeFs.createReadStream(filePath);
+  stream.on('data', chunk => hash.update(chunk));
+  stream.on('end', () => resolve(hash.digest('hex')));
+  stream.on('error', reject);
+});
+
 class HandlerUpdater {
-  // private static instance: HandlerUpdater;
-  private updateInfo?: {
-    version: string;
-    fileName: string;
-    feedURL: string;
-    downloadPath?: string;
-  };
+  private updateInfo?: PendingUpdate;
 
-  constructor() {
-  }
+  public async check(
+    contents: WebContents,
+    feedURL: string = process.env.BUCKETVIEW_UPDATE_FEED_URL || DEFAULT_UPDATE_FEED_URL,
+  ): Promise<boolean> {
+    if (process.env.VITE_DEV_SERVER_URL) return false;
+    if (!AUTO_INSTALL_PLATFORMS.has(nodeOs.platform())) return false;
 
-  // public static getInstance(): HandlerUpdater {
-  //   if (!HandlerUpdater.instance) {
-  //     HandlerUpdater.instance = new HandlerUpdater();
-  //   }
-  //   return HandlerUpdater.instance;
-  // }
+    const normalizedFeedURL = normalizeFeedURL(feedURL);
+    if (!normalizedFeedURL) return false;
 
-  public async check(contents: WebContents, feedURL: string = process.env.BUCKETVIEW_UPDATE_FEED_URL || ""): Promise<boolean> {
-    if (process.env.VITE_DEV_SERVER_URL) {
-      return false;
-    }
-    if (feedURL.trim().length == 0) {
-      return false;
-    }
+    const latestFileName = `latest-${nodeOs.platform()}.yml`;
+    const latestURL = `${normalizedFeedURL}/${latestFileName}`;
 
-    const latest = `latest-${nodeOs.platform()}.yml`
     try {
-      const response = await axios.get(`${feedURL}/${latest}`);
-      if (response.status != 200) {
+      const response = await axios.get<string>(latestURL, {
+        timeout: 15_000,
+        responseType: 'text',
+        headers: {
+          Accept: 'application/x-yaml, text/yaml, text/plain',
+          'Cache-Control': 'no-cache',
+        },
+        params: { t: Date.now() },
+      });
+      const parsed = YAML.parse(response.data) as unknown;
+      if (!isUpdateInfo(parsed)) {
+        throw new Error('更新清单格式无效');
+      }
+
+      if (!semver.gt(parsed.version, app.getVersion())) {
+        contents.send('handler-updater', { cmd: 'update-not-available' });
         return false;
       }
-      const info = YAML.parse(response.data) as UpdateInfo;
-      const newReleases = semver.gt(info.version, app.getVersion());
-      if (!newReleases) {
-        contents.send("handler-updater", {
-          cmd: 'update-not-available',
-        })
-        return false;
-      }
-      const file = info.files.find(file => file.name.endsWith(".zip") && file.arch == nodeOs.arch());
+
+      const file = parsed.files.find(item => item.name.endsWith('.zip') && item.arch === nodeOs.arch());
       if (!file) {
-        contents.send("handler-updater", {
-          cmd: 'update-not-available',
-        })
+        console.warn(`[updater] No ${nodeOs.platform()}/${nodeOs.arch()} asset in ${latestURL}`);
         return false;
       }
 
       this.updateInfo = {
-        version: info.version,
+        version: parsed.version,
         fileName: file.name,
-        feedURL,
+        feedURL: normalizedFeedURL,
+        sha512: file.sha512,
+        size: file.size,
       };
-      contents.send("handler-updater", {
+      contents.send('handler-updater', {
         cmd: 'update-available',
-        version: info.version,
+        version: parsed.version,
       });
       return true;
     } catch (error) {
-      contents.send("handler-updater", {
-        cmd: 'error',
-        message: error.message,
-      })
+      // 启动检查失败不打扰用户；下载或安装阶段的错误仍会显示通知。
+      console.warn(`[updater] Update check failed: ${getErrorMessage(error)}`);
       return false;
     }
   }
 
   public async download(contents: WebContents): Promise<boolean> {
     try {
-      if (!this.updateInfo) {
-        contents.send("handler-updater", {
-          cmd: 'error',
-          message: '未找到可下载的更新',
-        })
-        return false;
-      }
+      if (!this.updateInfo) throw new Error('未找到可下载的更新');
 
-      const downloadUrl = `${this.updateInfo.feedURL}/${this.updateInfo.fileName}`;
-      const dl = new DownloaderHelper(downloadUrl, nodeOs.tmpdir(), {
-        retry: { maxRetries: 20, delay: 30 * 1000 },
+      const downloadURL = `${this.updateInfo.feedURL}/${this.updateInfo.fileName}`;
+      const expectedPath = nodePath.join(nodeOs.tmpdir(), this.updateInfo.fileName);
+      nodeFs.rmSync(expectedPath, { force: true });
+
+      const downloader = new DownloaderHelper(downloadURL, nodeOs.tmpdir(), {
+        retry: { maxRetries: 5, delay: 5_000 },
         resumeOnIncomplete: true,
-        resumeOnIncompleteMaxRetry: 5,
+        resumeOnIncompleteMaxRetry: 3,
         fileName: this.updateInfo.fileName,
-        override: false,
+        override: true,
       });
 
-      dl.on("progress.throttled", (stats) => {
-        contents.send("handler-updater", {
+      downloader.on('progress.throttled', stats => {
+        contents.send('handler-updater', {
           cmd: 'download-progress',
           parent: Number(stats.progress.toFixed(2)),
-        })
-      })
-
-      const state = await dl.start();
-      if (state) {
-        this.updateInfo.downloadPath = dl.getDownloadPath();
-        contents.send("handler-updater", {
-          cmd: 'update-downloaded',
-          version: this.updateInfo.version,
         });
-        return true;
+      });
+
+      const state = await downloader.start();
+      if (!state) throw new Error('更新包下载未完成');
+
+      const downloadPath = downloader.getDownloadPath();
+      const stat = nodeFs.statSync(downloadPath);
+      if (stat.size !== this.updateInfo.size) {
+        nodeFs.rmSync(downloadPath, { force: true });
+        throw new Error('更新包大小校验失败，请重试');
       }
 
+      const actualSha512 = await calculateSha512(downloadPath);
+      if (actualSha512.toLowerCase() !== this.updateInfo.sha512.toLowerCase()) {
+        nodeFs.rmSync(downloadPath, { force: true });
+        throw new Error('更新包完整性校验失败，请重试');
+      }
+
+      this.updateInfo.downloadPath = downloadPath;
+      contents.send('handler-updater', {
+        cmd: 'update-downloaded',
+        version: this.updateInfo.version,
+      });
+      return true;
     } catch (error) {
-      contents.send("handler-updater", {
+      contents.send('handler-updater', {
         cmd: 'error',
-        message: error.message,
-      })
+        message: getErrorMessage(error),
+      });
       return false;
     }
   }
 
   public async installDownloaded(contents: WebContents): Promise<boolean> {
     try {
-      if (!this.updateInfo?.downloadPath) {
-        contents.send("handler-updater", {
-          cmd: 'error',
-          message: '更新包尚未下载完成',
-        })
-        return false;
-      }
+      if (!this.updateInfo?.downloadPath) throw new Error('更新包尚未下载完成');
+      if (!AUTO_INSTALL_PLATFORMS.has(nodeOs.platform())) throw new Error('当前平台暂不支持自动安装更新');
 
       let resources = nodePath.dirname(app.getAppPath());
-      if (process.env.VITE_DEV_SERVER_URL) {
-        resources = app.getAppPath();
-      }
-      let autoUpdaterBin = `autoUpdater-${nodeOs.platform()}-${nodeOs.arch()}${Platform.windows() ? ".exe" : ""}`;
-      autoUpdaterBin = nodePath.join(resources, "bin", autoUpdaterBin)
+      if (process.env.VITE_DEV_SERVER_URL) resources = app.getAppPath();
 
-      const currentExe = app.getPath("exe");
+      let autoUpdaterBin = `autoUpdater-${nodeOs.platform()}-${nodeOs.arch()}${Platform.windows() ? '.exe' : ''}`;
+      autoUpdaterBin = nodePath.join(resources, 'bin', autoUpdaterBin);
+      if (!nodeFs.existsSync(autoUpdaterBin)) throw new Error('未找到自动更新助手');
+
+      const currentExe = app.getPath('exe');
       let installPath = nodePath.dirname(currentExe);
-      if (Platform.macos()) {
-        installPath = "/Applications"
-      }
-      // windows直接使用autoUpdater会提示进程被占用
+      if (Platform.macos()) installPath = '/Applications';
+
+      // Windows 下先复制助手，避免当前安装目录中的文件被占用。
       if (Platform.windows()) {
-        let newAutoUpdaterBin = nodePath.join(nodeOs.tmpdir(), nodePath.basename(autoUpdaterBin));
-        nodeFs.copyFileSync(autoUpdaterBin, newAutoUpdaterBin);
-        autoUpdaterBin = newAutoUpdaterBin;
+        const tempUpdaterBin = nodePath.join(nodeOs.tmpdir(), nodePath.basename(autoUpdaterBin));
+        nodeFs.copyFileSync(autoUpdaterBin, tempUpdaterBin);
+        autoUpdaterBin = tempUpdaterBin;
       }
 
-      contents.send("handler-updater", {
+      contents.send('handler-updater', {
         cmd: 'installing',
         version: this.updateInfo.version,
       });
+      await sleep(500);
 
-      // 给渲染层一点时间刷新安装提示，再退出当前进程。
-      await sleep(500)
       nodeProcess.spawn(autoUpdaterBin, [this.updateInfo.downloadPath, installPath, currentExe], {
         detached: true,
-        stdio: 'ignore'
+        stdio: 'ignore',
       }).unref();
       return true;
     } catch (error) {
-      contents.send("handler-updater", {
+      contents.send('handler-updater', {
         cmd: 'error',
-        message: error.message,
-      })
+        message: getErrorMessage(error),
+      });
       return false;
     }
   }
-
-  // https://github.com/sunzongzheng/electron-updater/tree/master
-  // public async quitAndInstall() {
-  //   switch (process.platform) {
-  //     case 'darwin':
-  //       const unzip = exec(`unzip -o '${this.updatePath}' -d '/Applications/'`, { encoding: 'binary' })
-  //       unzip.on('exit', () => {
-  //         app.relaunch({ args: process.argv.slice(1).concat(['--relaunch']) })
-  //         app.exit(0)
-  //       })
-  //       break
-  //     case 'win32':
-  //       const args = ["--updated"]
-  //       args.push("/S")
-
-  //       args.push("--force-run")
-
-  //       const spawnOptions = {
-  //         detached: true,
-  //         stdio: "ignore",
-  //       }
-
-  //       try {
-  //         spawn(this.updatePath, args, spawnOptions)
-  //           .unref()
-  //       }
-  //       catch (e) {
-  //         this.emit('error', e)
-  //         console.warn(e)
-  //       }
-
-  //       app.exit(0)
-  //       break
-  //     default:
-  //       fs.chmodSync(this.updatePath, 0o755)
-  //       const appImageFile = process.env.APPIMAGE
-  //       if (appImageFile == null) {
-  //         this.emit('error', "APPIMAGE env is not defined", "ERR_UPDATER_OLD_FILE_NOT_FOUND")
-  //       }
-
-  //       // https://stackoverflow.com/a/1712051/1910191
-  //       fs.unlinkSync(appImageFile)
-
-  //       let destination
-  //       if (path.basename(this.updatePath) === path.basename(appImageFile)) {
-  //         // no version in the file name, overwrite existing
-  //         destination = appImageFile
-  //       }
-  //       else {
-  //         destination = path.join(path.dirname(appImageFile), path.basename(this.updatePath))
-  //       }
-
-  //       execSync(`mv -f ${this.updatePath} ${destination}`)
-
-  //       app.relaunch({
-  //         args: process.argv.slice(1).concat(['--relaunch']),
-  //         execPath: destination
-  //       })
-  //       app.exit(0)
-  //       break
-  //   }
-  // }
 }
 
 export const handlerUpdater = new HandlerUpdater();

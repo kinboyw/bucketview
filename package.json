@@ -24,10 +24,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && electron-builder",
-    "build:mac": "vite build && electron-builder --mac",
+    "build:mac": "vite build && electron-builder --mac --x64 --publish never",
     "build:mac:docker": "docker rmi bucketview_macos:$npm_package_version ; docker build -t bucketview_macos:$npm_package_version -f Dockerfile.macos . && docker run -d -it --rm --name bucketview_macos  bucketview_macos:$npm_package_version && docker cp bucketview_macos:/project/release . && docker stop bucketview_macos",
-    "build:win": "vite build && electron-builder --win",
-    "build:linux": "vite build && electron-builder --linux",
+    "build:win": "vite build && electron-builder --win --x64 --publish never",
+    "build:linux": "vite build && electron-builder --linux --x64 --publish never",
     "build:win:docker": "docker rmi bucketview_windows:$npm_package_version ; docker build -t bucketview_windows:$npm_package_version -f Dockerfile.windows . && docker run -d -it --rm --name bucketview_windows  bucketview_windows:$npm_package_version && docker cp bucketview_windows:/project/release . && docker stop bucketview_windows",
     "preview": "vite preview",
     "build:app": "vite build",

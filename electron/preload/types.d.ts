@@ -447,13 +447,11 @@ export type UpdaterResponse =
 // updater
 export interface UpdateInfo {
   version: string;
-  files: File[];
-  path: string;
-  sha512: string;
-  releaseDate: Date;
+  files: UpdateFile[];
+  releaseDate: string | Date;
 }
 
-export interface File {
+export interface UpdateFile {
   name: string;
   sha512: string;
   arch: string;

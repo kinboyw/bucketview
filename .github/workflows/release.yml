@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            command: npm run build:win
+            artifact: bucketview-windows-x64
+          - name: macOS Intel
+            os: macos-15-intel
+            command: npm run build:mac
+            artifact: bucketview-macos-x64
+          - name: Linux x64
+            os: ubuntu-latest
+            command: npm run build:linux
+            artifact: bucketview-linux-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Verify tag matches package version
+        run: node scripts/verify-release-version.mjs "${{ github.ref_name }}"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare Linux rclone
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RCLONE_VERSION="1.74.1"
+          curl --fail --location --retry 3 \
+            "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip" \
+            --output /tmp/rclone.zip
+          unzip -q /tmp/rclone.zip -d /tmp/rclone
+          cp "/tmp/rclone/rclone-v${RCLONE_VERSION}-linux-amd64/rclone" bin/rclone-linux-x64
+          chmod +x bin/rclone-linux-x64
+
+      - name: Package application
+        run: ${{ matrix.command }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload packaged assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            release/*.zip
+            release/latest-*.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download packaged assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          expected=(
+            "BucketView_${VERSION}_win32_x64.zip"
+            "BucketView_${VERSION}_darwin_x64.zip"
+            "BucketView_${VERSION}_linux_x64.zip"
+            "latest-win32.yml"
+            "latest-darwin.yml"
+            "latest-linux.yml"
+          )
+          for file in "${expected[@]}"; do
+            test -f "release-assets/${file}" || {
+              echo "Missing release asset: ${file}" >&2
+              find release-assets -maxdepth 2 -type f -print
+              exit 1
+            }
+          done
+          find release-assets -maxdepth 1 -type f -print -exec sha256sum {} \;
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --generate-notes \
+            --title "BucketView ${GITHUB_REF_NAME#v}"

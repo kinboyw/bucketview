@@ -60,6 +60,29 @@ npm run build:mac
 npm run build:linux
 ```
 
+## Releases and automatic updates
+
+Pushing a semantic-version tag that matches `package.json` triggers the GitHub Actions release workflow:
+
+```bash
+npm version patch
+git push origin main --follow-tags
+```
+
+The workflow builds x64 ZIP packages for Windows, macOS Intel, and Linux, generates `latest-<platform>.yml` update manifests, and publishes all assets to a GitHub Release.
+
+Packaged Windows and macOS applications check the latest public GitHub Release at startup. When a newer version is available, BucketView asks before downloading and asks again before installation. Downloads are verified against the SHA-512 checksum and file size in the release manifest.
+
+The default update feed is:
+
+```text
+https://github.com/kinboyw/bucketview/releases/latest/download
+```
+
+Set `BUCKETVIEW_UPDATE_FEED_URL` to override it for a fork or private mirror. Linux packages are published, but automatic in-place installation is not currently enabled on Linux.
+
+Current community builds are unsigned. Windows SmartScreen or macOS Gatekeeper may display a warning until platform signing is configured.
+
 ## Security
 
 Do not commit access keys, secret keys, exported connection profiles, application databases, logs, or generated mount configuration files. See [SECURITY.md](SECURITY.md) for vulnerability reporting guidance.
