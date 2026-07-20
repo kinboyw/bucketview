@@ -45,3 +45,5 @@ bin/*
 # Local scratch files
 ocr_pdf_to_word.py
 temp_ocr/
+
+*.tsbuildinfo

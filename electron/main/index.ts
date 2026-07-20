@@ -377,14 +377,37 @@ async function createWindow() {
 
   ipcMain.removeAllListeners('updater-install');
   ipcMain.on('updater-install', async () => {
-    const state = await handlerUpdater.installDownloaded(win.webContents);
-    if (state) {
+    try {
+      const state = await handlerUpdater.installDownloaded(win.webContents);
+      if (!state) return;
+
+      // Installer needs the app fully exited so package files are not locked.
+      forceQuit = true;
       isQuitting = true;
-      win.removeAllListeners("close");
-      if (tray) {
-        tray.destroy();
-      }
-      app.quit();
+      try { win.removeAllListeners('close'); } catch {}
+      try {
+        if (previewWin && !previewWin.isDestroyed()) {
+          previewWin.removeAllListeners('close');
+          previewWin.destroy();
+        }
+      } catch {}
+      try {
+        if (tray) {
+          tray.destroy();
+          tray = null as any;
+        }
+      } catch {}
+      try {
+        if (win && !win.isDestroyed()) {
+          win.destroy();
+        }
+      } catch {}
+      // Force process exit; app.quit() can hang on Windows with open native modules / tray.
+      setTimeout(() => {
+        try { app.exit(0); } catch { process.exit(0); }
+      }, 200);
+    } catch (error) {
+      console.error('[updater] install handler failed:', error);
     }
   });
 

@@ -64,25 +64,32 @@ export const useTransferStore = defineStore('transfer', {
       if (this.loaded) return;
       const storage = (window as any).storage as PreloadStorage;
       if (!storage?.listTransferRecords) return;
-      const total = storage.countTransferRecords();
-      this.queue = reactive<map>({});
-      // Load in pages for large datasets
-      let offset = 0;
-      while (offset < total) {
-        const records = storage.listTransferRecords(offset, PAGE_SIZE);
-        for (const r of records) {
-          if (r && r.uid) {
-            // Skip records still in active queue (they'll be recovered)
-            if (r.status === 'running' || r.status === 'waiting') {
-              r.status = 'error';
-              r.errorDesc = '传输中断（应用退出）';
+      try {
+        const total = storage.countTransferRecords?.() ?? 0;
+        this.queue = reactive<map>({});
+        // Load in pages for large datasets
+        let offset = 0;
+        while (offset < total) {
+          const records = storage.listTransferRecords(offset, PAGE_SIZE) || [];
+          for (const r of records) {
+            if (r && r.uid) {
+              // Skip records still in active queue (they'll be recovered)
+              if (r.status === 'running' || r.status === 'waiting') {
+                r.status = 'error';
+                r.errorDesc = '传输中断（应用退出）';
+              }
+              this.queue[r.uid] = r;
             }
-            this.queue[r.uid] = r;
           }
+          offset += PAGE_SIZE;
         }
-        offset += PAGE_SIZE;
+        this.loaded = true;
+      } catch (error) {
+        // better-sqlite3 / queue may still be opening or failed in packaged builds.
+        console.warn('[transfer] loadFromStorage failed:', error);
+        this.queue = reactive<map>({});
+        this.loaded = true;
       }
-      this.loaded = true;
     },
     clean() {
       Object.keys(this.queue).forEach((key) => {

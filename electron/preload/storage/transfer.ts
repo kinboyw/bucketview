@@ -1,3 +1,6 @@
+import { app } from "electron";
+import nodePath from "node:path";
+import nodeFs from "node:fs";
 import { TransferObjectOption, Storage, ProgressCallback, CancelFunction, Connection } from "../types";
 import PersistentQueue from "./PersistentQueue"
 
@@ -53,8 +56,19 @@ export class Transfer {
     this.storages = storages
     this.eventBus = eventBus
 
-    this.transferQueue = new PersistentQueue("./db.sqlite", 1)
-    this.transferQueue.setDebug(true)
+    const dbDir = (() => {
+      try {
+        return app.getPath('userData');
+      } catch {
+        return process.cwd();
+      }
+    })();
+    try {
+      nodeFs.mkdirSync(dbDir, { recursive: true });
+    } catch {}
+    const dbPath = nodePath.join(dbDir, 'transfer-queue.sqlite');
+    this.transferQueue = new PersistentQueue(dbPath, 1)
+    this.transferQueue.setDebug(false)
     this.transferQueue.on("next", ({ id, job }) => {
       const stor = this.storages[job.key || 'minio']
       stor.changeConfig(job.connection || {})
@@ -126,9 +140,13 @@ export class Transfer {
           });
       }
     })
-    this.transferQueue.open().then(() => {
-      this.transferQueue.start()
-    })
+    this.transferQueue.open()
+      .then(() => {
+        this.transferQueue.start()
+      })
+      .catch((error) => {
+        console.error('[Transfer] failed to open queue database:', error)
+      })
   }
 
   public Add(job: TransferOptions) {

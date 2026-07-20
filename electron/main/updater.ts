@@ -236,12 +236,27 @@ class HandlerUpdater {
         cmd: 'installing',
         version: this.updateInfo.version,
       });
-      await sleep(500);
+      await sleep(300);
 
-      nodeProcess.spawn(autoUpdaterBin, [this.updateInfo.downloadPath, installPath, currentExe], {
+      if (!nodeFs.existsSync(this.updateInfo.downloadPath)) {
+        throw new Error(`更新包不存在: ${this.updateInfo.downloadPath}`);
+      }
+
+      const args = [this.updateInfo.downloadPath, installPath, currentExe];
+      console.log('[updater] launching autoUpdater', { autoUpdaterBin, args });
+
+      const child = nodeProcess.spawn(autoUpdaterBin, args, {
         detached: true,
         stdio: 'ignore',
-      }).unref();
+        windowsHide: true,
+      });
+      child.once('error', (spawnError) => {
+        console.error('[updater] autoUpdater spawn failed:', spawnError);
+      });
+      // Detach immediately so installer can replace files after we exit.
+      child.unref();
+      // Give the helper a brief moment to start before the host process exits.
+      await sleep(400);
       return true;
     } catch (error) {
       contents.send('handler-updater', {

@@ -221,42 +221,45 @@ export default class PersistentQueue extends EventEmitter {
   // ── Transfer records (UI persistence) ──
 
   upsertTransferRecord(uid: string, data: any): void {
-    if (this.db === null) throw new Error('Open queue database before upserting records');
+    if (this.db === null) {
+      console.warn('[PersistentQueue] upsert skipped: database not open yet');
+      return;
+    }
     const now = Date.now();
-    this.db!.prepare(`INSERT OR REPLACE INTO ${TABLE_RECORDS} (uid, data, updated_at) VALUES (?, ?, ?)`).run(uid, JSON.stringify(data), now);
+    this.db.prepare(`INSERT OR REPLACE INTO ${TABLE_RECORDS} (uid, data, updated_at) VALUES (?, ?, ?)`).run(uid, JSON.stringify(data), now);
   }
 
   getTransferRecord(uid: string): string | null {
-    if (this.db === null) throw new Error('Open queue database before getting records');
-    const row = this.db!.prepare(`SELECT data FROM ${TABLE_RECORDS} WHERE uid = ?`).get(uid) as { data: string } | undefined;
+    if (this.db === null) return null;
+    const row = this.db.prepare(`SELECT data FROM ${TABLE_RECORDS} WHERE uid = ?`).get(uid) as { data: string } | undefined;
     return row ? row.data : null;
   }
 
   listTransferRecords(offset: number, limit: number): string[] {
-    if (this.db === null) throw new Error('Open queue database before listing records');
-    const rows = this.db!.prepare(`SELECT data FROM ${TABLE_RECORDS} ORDER BY updated_at DESC LIMIT ? OFFSET ?`).all(limit, offset) as { data: string }[];
+    if (this.db === null) return [];
+    const rows = this.db.prepare(`SELECT data FROM ${TABLE_RECORDS} ORDER BY updated_at DESC LIMIT ? OFFSET ?`).all(limit, offset) as { data: string }[];
     return rows.map((r: { data: string }) => r.data);
   }
 
   countTransferRecords(): number {
-    if (this.db === null) throw new Error('Open queue database before counting records');
-    const row = this.db!.prepare(`SELECT COUNT(*) as cnt FROM ${TABLE_RECORDS}`).get() as { cnt: number };
+    if (this.db === null) return 0;
+    const row = this.db.prepare(`SELECT COUNT(*) as cnt FROM ${TABLE_RECORDS}`).get() as { cnt: number };
     return row.cnt;
   }
 
   deleteTransferRecord(uid: string): void {
-    if (this.db === null) throw new Error('Open queue database before deleting records');
-    this.db!.prepare(`DELETE FROM ${TABLE_RECORDS} WHERE uid = ?`).run(uid);
+    if (this.db === null) return;
+    this.db.prepare(`DELETE FROM ${TABLE_RECORDS} WHERE uid = ?`).run(uid);
   }
 
   clearTransferRecords(): void {
-    if (this.db === null) throw new Error('Open queue database before clearing records');
-    this.db!.exec(`DELETE FROM ${TABLE_RECORDS}`);
+    if (this.db === null) return;
+    this.db.exec(`DELETE FROM ${TABLE_RECORDS}`);
   }
 
   recoverInterrupted(): string[] {
-    if (this.db === null) throw new Error('Open queue database before recovering');
-    const rows = this.db!.prepare(`SELECT job FROM ${TABLE} ORDER BY id ASC`).all() as { job: string }[];
+    if (this.db === null) return [];
+    const rows = this.db.prepare(`SELECT job FROM ${TABLE} ORDER BY id ASC`).all() as { job: string }[];
     return rows.map((r: { job: string }) => r.job);
   }
 

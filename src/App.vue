@@ -1,11 +1,13 @@
 <template>
   <a-config-provider :theme="{ algorithm: isDarkTheme ? theme.darkAlgorithm : theme.defaultAlgorithm, token: { colorPrimary: '#1890ff' } }">
-    <div class="app-custom-titlebar">
-      <img src="/favicon.svg" alt="logo" class="titlebar-logo" />
-      <span class="titlebar-title">BucketView</span>
-      <button class="titlebar-version" title="关于 BucketView" @click="aboutOpen = true">v{{ appVersion }}</button>
+    <div class="app-shell">
+      <div class="app-custom-titlebar">
+        <img src="/favicon.svg" alt="logo" class="titlebar-logo" />
+        <span class="titlebar-title">BucketView</span>
+        <button class="titlebar-version" title="关于 BucketView" @click="aboutOpen = true">v{{ appVersion }}</button>
+      </div>
+      <div class="app-main-content-wrapper" :class="{ 'dark-theme': isDarkTheme }"><router-view /></div>
     </div>
-    <div class="app-main-content-wrapper" :class="{ 'dark-theme': isDarkTheme }"><router-view /></div>
 
     <a-modal v-model:open="aboutOpen" title="关于 BucketView" centered :footer="null" :width="480">
       <div class="about-content">
@@ -533,15 +535,25 @@ body,
   overflow: hidden;
 }
 
-#app > div {
+#app > div.app-shell,
+#app .app-shell {
   height: 100%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#app .app-custom-titlebar {
+  height: 32px;
+  flex: 0 0 32px;
 }
 
 #app .app-main-content-wrapper {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
+  height: auto !important;
+  overflow: hidden;
 }
 
 #app .ant-spin-nested-loading {
