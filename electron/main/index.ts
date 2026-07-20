@@ -5,6 +5,7 @@ import * as remoteMain from '@electron/remote/main';
 import loadingHtml from "./loading";
 import { Platform } from "../common";
 import Store from "electron-store";
+import { ensureRcloneBinary } from '../common/rclone-bin';
 import { Fuse } from '../preload/storage/fuse';
 import { Connection, MountTarget } from '../preload/types';
 import Registry from "winreg";
@@ -556,15 +557,34 @@ app.whenReady().then(async () => {
     return;
   }
 
-  // 自动挂载
+  // 自动挂载（按需下载 rclone）
   const store = new Store();
   const targets = store.get("app.openAtLogin.targets", {}) as { [key: string]: { connection: Connection, mountTarget: MountTarget } };
-  const fuseBin = store.get(`app.openAtLogin.fuseBin`, "") as string;
+  const preferredFuseBin = store.get(`app.openAtLogin.fuseBin`, "") as string;
+  let resourcesDir = nodePath.dirname(app.getAppPath());
+  if (process.env.VITE_DEV_SERVER_URL) {
+    resourcesDir = app.getAppPath();
+  }
+  const ensure = await ensureRcloneBinary({
+    userDataDir: app.getPath('userData'),
+    resourcesDir,
+    preferredPath: preferredFuseBin,
+  });
+  if (!ensure.success) {
+    console.error('[auto-mount] rclone unavailable:', ensure.message || 'unknown error');
+    return;
+  }
+  const fuseBinPath = ensure.path || '';
+  if (!fuseBinPath) {
+    console.error('[auto-mount] rclone path missing');
+    return;
+  }
+  store.set('app.openAtLogin.fuseBin', fuseBinPath);
   const keys = Object.keys(targets);
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const { connection, mountTarget } = targets[key];
-    const resp = await Fuse.mount(connection, mountTarget, fuseBin);
+    const resp = await Fuse.mount(connection, mountTarget, fuseBinPath);
     if (!resp.success) {
       // TODO: 记录日志
     }

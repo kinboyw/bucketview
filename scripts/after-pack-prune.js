@@ -56,4 +56,16 @@ exports.default = async function pruneNativeExtras(context) {
     fs.rmSync(quickjs, { recursive: true, force: true })
     console.log('[afterPack] removed quickjs-wasi')
   }
+
+  // Keep only essential Chromium locales (fallback if electronLanguages is ignored)
+  const localesDir = path.join(context.appOutDir, 'locales')
+  if (fs.existsSync(localesDir)) {
+    const keep = new Set(['en-US.pak', 'zh-CN.pak'])
+    for (const name of fs.readdirSync(localesDir)) {
+      if (!keep.has(name)) {
+        fs.rmSync(path.join(localesDir, name), { force: true })
+      }
+    }
+    console.log('[afterPack] pruned chromium locales to en-US/zh-CN')
+  }
 }

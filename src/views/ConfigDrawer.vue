@@ -138,12 +138,13 @@
         <div class="setting-form-row">
           <span class="setting-form-label">挂载程序</span>
           <div class="setting-form-control">
-            <a-input v-model:value="fuseBinValue" size="small" style="width: calc(100% - 32px)" @change="handleFuseBinChange" />
+            <a-input v-model:value="fuseBinValue" size="small" style="width: calc(100% - 32px)" placeholder="留空则首次挂载自动下载 rclone" @change="handleFuseBinChange" />
             <a-button size="small" @click="handleSelectFuse">
               <FolderOpenOutlined />
             </a-button>
           </div>
         </div>
+        <div class="setting-desc">默认不内置 rclone（减小安装包）。首次挂载会自动下载到用户目录；也可手动指定本地 rclone 路径。</div>
         <div class="setting-form-row">
           <span class="setting-form-label">默认缓存目录</span>
           <div class="setting-form-control">
@@ -1426,8 +1427,20 @@ export default defineComponent({
       }
       const label = target.pathPrefix ? `${target.bucket}/${target.pathPrefix}` : target.bucket;
       mountStates[target.id + '_loading'] = true;
-      fuse.preMountCleanup(mountTarget).then(() => {
-        return fuse.mount(_.cloneDeep(toRaw(conn)), mountTarget, settingStore.fuseBin || "");
+      native.ensureRclone(settingStore.fuseBin || '').then((ensure) => {
+        if (!ensure.success || !ensure.path) {
+          throw new Error(ensure.message || '挂载程序不可用，请在系统设置中指定 rclone 路径');
+        }
+        if (settingStore.fuseBin !== ensure.path) {
+          settingStore.fuseBin = ensure.path;
+          fuseBinValue.value = ensure.path;
+        }
+        if (ensure.source === 'downloaded') {
+          notification.info({ message: '已自动下载挂载程序', description: '首次挂载会下载 rclone，完成后继续挂载' });
+        }
+        return fuse.preMountCleanup(mountTarget).then(() => {
+          return fuse.mount(_.cloneDeep(toRaw(conn)), mountTarget, ensure.path || '');
+        });
       }).then((resp) => {
         mountStates[target.id + '_loading'] = false;
         if (resp.success) {

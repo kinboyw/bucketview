@@ -170,6 +170,7 @@ export interface PreloadNative {
   localFileSize: (path: string) => number | null;
   resolveUniquePath: (localPath: string) => string;
   fuseBin: () => string;
+  ensureRclone: (preferredPath?: string) => Promise<{ success: boolean; path?: string; message?: string; source?: string }>;
   appVersion: () => string;
   ipc: (channel: string, listener: (event: IpcRendererEvent, ...args: UpdaterResponse[]) => void) => void;
   ipcSend: (channel: string, ...args: any[]) => void;

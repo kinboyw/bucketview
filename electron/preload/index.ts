@@ -25,6 +25,7 @@ import nodePath from 'node:path';
 import { Fuse } from './storage/fuse';
 import nodeOs from 'node:os';
 import { Platform } from '../common';
+import { ensureRcloneBinary, managedRclonePath, bundledRclonePath } from '../common/rclone-bin';
 import fse from 'fs-extra';
 import { stat } from 'original-fs';
 import { constant } from 'lodash';
@@ -272,12 +273,32 @@ contextBridge.exposeInMainWorld('native', {
     return localPath;
   },
   fuseBin(): string {
+    // Prefer previously downloaded/managed binary, then optional bundled binary for dev.
+    const managed = managedRclonePath(app.getPath('userData'), nodeOs.platform(), nodeOs.arch());
+    if (fse.existsSync(managed)) return managed;
+
     let resources = nodePath.dirname(app.getAppPath());
     if (process.env.VITE_DEV_SERVER_URL) {
       resources = app.getAppPath();
     }
-    const name = `rclone-${nodeOs.platform()}-${nodeOs.arch()}${Platform.windows() ? '.exe' : ''}`;
-    return nodePath.join(resources, 'bin', name);
+    const bundled = bundledRclonePath(resources, nodeOs.platform(), nodeOs.arch());
+    if (fse.existsSync(bundled)) return bundled;
+    return managed;
+  },
+  async ensureRclone(preferredPath?: string): Promise<{ success: boolean; path?: string; message?: string; source?: string }> {
+    let resources = nodePath.dirname(app.getAppPath());
+    if (process.env.VITE_DEV_SERVER_URL) {
+      resources = app.getAppPath();
+    }
+    const result = await ensureRcloneBinary({
+      userDataDir: app.getPath('userData'),
+      resourcesDir: resources,
+      preferredPath,
+    });
+    if (result.success && result.path) {
+      return { success: true, path: result.path, source: result.source };
+    }
+    return { success: false, message: result.message || 'rclone 不可用' };
   },
   appVersion(): string {
     return app.getVersion();

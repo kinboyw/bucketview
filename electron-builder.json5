@@ -52,7 +52,7 @@
   "mac": {
     "icon": "public/favicon.icns",
     "artifactName": "BucketView_${version}_darwin_${arch}.zip",
-    "extraResources": [{"from":"bin/rclone-darwin-${arch}", "to":"bin/rclone-darwin-${arch}"}, {"from":"bin/autoUpdater-darwin-${arch}", "to":"bin/autoUpdater-darwin-${arch}"}],
+    "extraResources": [{"from":"bin/autoUpdater-darwin-${arch}", "to":"bin/autoUpdater-darwin-${arch}"}],
     "target": [
       {
         "target": "zip",
@@ -64,7 +64,7 @@
   },
   "win": {
     "icon": "public/favicon.ico",
-    "extraResources": [{"from":"bin/rclone-win32-${arch}.exe", "to":"bin/rclone-win32-${arch}.exe"}, {"from":"bin/autoUpdater-win32-${arch}.exe", "to":"bin/autoUpdater-win32-${arch}.exe"}],
+    "extraResources": [{"from":"bin/autoUpdater-win32-${arch}.exe", "to":"bin/autoUpdater-win32-${arch}.exe"}],
     "target": [
       {
         "target": "zip",
@@ -84,7 +84,7 @@
   "linux": {
     "icon": "public/favicon.png",
     "artifactName": "BucketView_${version}_linux_${arch}.zip",
-    "extraResources": [{"from":"bin/rclone-linux-${arch}", "to":"bin/rclone-linux-${arch}"}],
+    "extraResources": [],
     "target": [
       {
         "target": "zip",

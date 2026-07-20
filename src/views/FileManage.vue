@@ -3138,7 +3138,18 @@ export default defineComponent({
           return;
         }
         auditStore.log('mount', label, { description: `挂载 ${target.mountPoint}` });
-        fuse.mount(rawConn, mountTarget, settingStore.fuseBin || native.fuseBin()).then((resp) => {
+        native.ensureRclone(settingStore.fuseBin || '').then((ensure) => {
+          if (!ensure.success || !ensure.path) {
+            throw new Error(ensure.message || '挂载程序不可用，请在系统设置中指定 rclone 路径');
+          }
+          if (settingStore.fuseBin !== ensure.path) {
+            settingStore.fuseBin = ensure.path;
+          }
+          if (ensure.source === 'downloaded') {
+            notification.info({ message: '已自动下载挂载程序', description: '首次挂载会下载 rclone，完成后继续挂载' });
+          }
+          return fuse.mount(rawConn, mountTarget, ensure.path);
+        }).then((resp) => {
           if (resp.success) {
             notification.success({ message: `${label} 挂载成功` });
             // 挂载成功：刷新当前目录（无需验证特定文件）
@@ -3146,7 +3157,10 @@ export default defineComponent({
           }
           else { console.error('[MOUNT] 挂载失败:', resp.desc); notification.error({ message: `${label} 挂载失败`, description: resp.desc }); }
           refreshMountStatus();
-        }).catch((err) => { console.error('[MOUNT] 挂载异常:', err); }).finally(() => { mountLoadingMap[targetId] = false; });
+        }).catch((err) => {
+          console.error('[MOUNT] 挂载异常:', err);
+          notification.error({ message: `${label} 挂载失败`, description: err?.message || String(err) });
+        }).finally(() => { mountLoadingMap[targetId] = false; });
       }
     };
 

@@ -58,18 +58,6 @@ jobs:
       - name: Rebuild native modules for Electron
         run: npx electron-builder install-app-deps
 
-      - name: Prepare Linux rclone
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          RCLONE_VERSION="1.74.1"
-          curl --fail --location --retry 3 \
-            "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip" \
-            --output /tmp/rclone.zip
-          unzip -q /tmp/rclone.zip -d /tmp/rclone
-          cp "/tmp/rclone/rclone-v${RCLONE_VERSION}-linux-amd64/rclone" bin/rclone-linux-x64
-          chmod +x bin/rclone-linux-x64
 
       - name: Package application
         run: ${{ matrix.command }}
