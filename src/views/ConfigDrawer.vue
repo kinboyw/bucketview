@@ -186,6 +186,24 @@
           </div>
         </div>
         <div class="setting-desc">瀑布流模式下通过滚动鼠标加载更多文件；翻页模式下通过页码翻页</div>
+        <div class="setting-divider"></div>
+        <div class="setting-form-row">
+          <span class="setting-form-label">关闭主窗口时</span>
+          <div class="setting-form-control">
+            <a-radio-group v-model:value="closeBehaviorValue" size="small" @change="handleCloseBehaviorChange">
+              <a-radio-button value="hide">隐藏到任务栏</a-radio-button>
+              <a-radio-button value="exit">退出应用</a-radio-button>
+            </a-radio-group>
+          </div>
+        </div>
+        <div class="setting-desc">默认隐藏主窗口并保留任务栏通知区域图标，后台传输、挂载等任务可继续运行。</div>
+        <div v-if="closeBehaviorValue === 'exit'" class="setting-row setting-sub-row">
+          <div>
+            <div class="setting-label">退出前显示影响提示</div>
+            <div class="setting-desc setting-desc-inline">关闭提醒后，可随时在这里重新开启。</div>
+          </div>
+          <a-switch v-model:checked="confirmBeforeExitValue" size="small" @change="handleConfirmBeforeExitChange" />
+        </div>
         <div class="setting-form-row color-group-row">
           <span class="setting-form-label">连接主题色组</span>
           <div class="setting-form-control">
@@ -591,6 +609,8 @@ export default defineComponent({
     const defaultPageSizeValue = ref<number>(settingStore.defaultPageSize || 20);
     const defaultDownloadDirectoryValue = ref<string>(settingStore.defaultDownloadDirectory || '');
     const listLoadModeValue = ref<'pagination' | 'waterfall'>(settingStore.listLoadMode || 'waterfall');
+    const closeBehaviorValue = ref<'hide' | 'exit'>(settingStore.closeBehavior === 'exit' ? 'exit' : 'hide');
+    const confirmBeforeExitValue = ref<boolean>(settingStore.confirmBeforeExit !== false);
     const colorGroupIdValue = ref<string>(settingStore.connectionColorGroupId || defaultConnectionColorGroups[0].id);
     const mountStates = reactive<Record<string, boolean>>({});
     const windowsDrives = ref<string[]>([]);
@@ -774,6 +794,8 @@ export default defineComponent({
     const handleDefaultDownloadDirectoryChange = () => { settingStore.setDefaultDownloadDirectory(defaultDownloadDirectoryValue.value); };
     const handleDefaultPageSizeChange = (val: number) => { settingStore.setDefaultPageSize(val); };
     const handleListLoadModeChange = () => { settingStore.setListLoadMode(listLoadModeValue.value); };
+    const handleCloseBehaviorChange = () => { settingStore.setCloseBehavior(closeBehaviorValue.value); };
+    const handleConfirmBeforeExitChange = (enabled: boolean) => { settingStore.setConfirmBeforeExit(enabled); };
 
     // ── Bucket 列表加载 & 过滤 ──
     const allBucketsCache = ref<string[]>([]);
@@ -1266,6 +1288,8 @@ export default defineComponent({
         defaultDownloadDirectoryValue.value = settingStore.defaultDownloadDirectory || '';
         defaultPageSizeValue.value = settingStore.defaultPageSize ?? 20;
         listLoadModeValue.value = settingStore.listLoadMode || 'waterfall';
+        closeBehaviorValue.value = settingStore.closeBehavior === 'exit' ? 'exit' : 'hide';
+        confirmBeforeExitValue.value = settingStore.confirmBeforeExit !== false;
         colorGroupIdValue.value = settingStore.connectionColorGroupId || defaultConnectionColorGroups[0].id;
       }
     }, { immediate: true });
@@ -1280,7 +1304,7 @@ export default defineComponent({
       configStore, activeTab, tabs, endpointProtocol, drawerOpen,
       flashUploadEnabled, flashUploadThresholdMB,
       fuseBinValue, defaultCacheDirectoryValue, defaultPageSizeValue, defaultDownloadDirectoryValue,
-      listLoadModeValue, colorGroupIdValue,
+      listLoadModeValue, closeBehaviorValue, confirmBeforeExitValue, colorGroupIdValue,
       mountStates, isWindows, allBucketsCache, bucketFetching, availableDrives,
       connectionModalState, connectionModalFormState, connectionModalFormRef,
       connectionModalTitle, connectionIdDisabled,
@@ -1291,7 +1315,7 @@ export default defineComponent({
       handleSelectFuse, handleSelectDefaultCacheDirectory, handleSelectDefaultDownloadDirectory,
       collapsedConnections, toggleConnection,
       handleFuseBinChange, handleDefaultCacheDirectoryChange, handleDefaultDownloadDirectoryChange, handleDefaultPageSizeChange,
-      handleListLoadModeChange, connectionColorGroups, activeCustomColorGroup,
+      handleListLoadModeChange, handleCloseBehaviorChange, handleConfirmBeforeExitChange, connectionColorGroups, activeCustomColorGroup,
       normalizeHexColor, handleConnectionColorGroupChange, handleCopyColorGroup, syncActiveCustomColorGroup,
       handleAddColorToGroup, handleRemoveColorFromGroup, handleColorPickerInput, handleColorHexBlur, handleDeleteCustomColorGroup,
       filterBucketOption, handleBucketFocus, retryFetchBuckets, bucketListFailed, handleTargetBucketFocus, retryFetchBucketsTarget,
@@ -1417,6 +1441,9 @@ export default defineComponent({
   background: var(--ant-color-bg-container); border: 1px solid var(--ant-color-border); border-radius: 6px; padding: 12px;
   .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; .setting-label { font-size: 12px; color: var(--ant-color-text-secondary); } }
   .setting-desc { font-size: 11px; color: var(--ant-color-text-tertiary); margin-top: 6px; line-height: 1.5; }
+  .setting-divider { height: 1px; background: var(--ant-color-border-secondary); margin: 14px 0; }
+  .setting-sub-row { margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--ant-color-fill-quaternary); }
+  .setting-desc-inline { margin-top: 2px; }
   .setting-form-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; .setting-form-label { font-size: 12px; color: var(--ant-color-text-secondary); min-width: 90px; white-space: nowrap; } .setting-form-control { flex: 1; display: flex; gap: 4px; min-width: 0; } }
   .color-group-row { margin-top: 14px; align-items: flex-start; }
   .color-group-picker {

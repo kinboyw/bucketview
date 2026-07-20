@@ -339,10 +339,7 @@ async function createWindow() {
   // 关闭窗口提示
   let isQuitting = false;
   win.on('close', e => {
-    if (process.env.VITE_DEV_SERVER_URL) {
-      return;
-    }
-    if (isQuitting) return;
+    if (isQuitting || forceQuit) return;
 
     e.preventDefault();  // 阻止默认关闭行为，发送给前端处理
     if (BrowserWindow.getAllWindows().length === 0) return;
@@ -355,6 +352,17 @@ async function createWindow() {
     if (previewWin && !previewWin.isDestroyed()) previewWin.destroy();
     win?.destroy();
   });
+
+  const hideMainWindow = () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isFullScreen()) win.setFullScreen(false);
+    win.hide();
+  };
+  ipcMain.removeAllListeners('hide-app-window');
+  ipcMain.on('hide-app-window', hideMainWindow);
+  // 兼容升级前已加载的渲染进程，旧的最小化指令也按隐藏处理。
+  ipcMain.removeAllListeners('minimize-app-window');
+  ipcMain.on('minimize-app-window', hideMainWindow);
 
   ipcMain.on('updater-download', () => {
     handlerUpdater.download(win.webContents);
@@ -433,61 +441,109 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('[main] Failed to create tray:', err);
   }
-  let openAtLogin = loginItemSettings?.openAtLogin;
-  if (Platform.windows()) {
-    try {
-      const appPath = app.getPath('exe');
-      const key = new Registry({
-        hive: Registry.HKCU,
-        key: '\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
-      });
-      openAtLogin = await new Promise<boolean>((resolve, reject) => {
-        key.get(app.name, (error: any, item: any) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve(item && item.value.indexOf(appPath) >= 0);
-          }
-        });
-      });
-    } catch (error) {
+  const loginItemName = 'BucketView';
+  const loginItemPath = process.execPath;
+  const loginItemArgs = app.isPackaged
+    ? ["--openAsHidden"]
+    : [app.getAppPath(), "--openAsHidden"];
+  const windowsRunKey = new Registry({
+    hive: Registry.HKCU,
+    key: '\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+  });
+
+  const readOpenAtLogin = async (): Promise<boolean> => {
+    if (!Platform.windows()) {
+      return app.getLoginItemSettings({ path: loginItemPath, args: loginItemArgs }).openAtLogin;
     }
-  }
-  // 配置右键菜单
-  var trayMenu = Menu.buildFromTemplate([
-    {
-      type: 'checkbox',
-      label: '开机启动',
-      checked: openAtLogin,
-      click: () => {
-        if (app.isPackaged) {
-          app.setLoginItemSettings({
-            openAtLogin: !loginItemSettings?.openAtLogin,
-            path: process.execPath,
-            openAsHidden: true,
-            args: ["--openAsHidden"],
-          })
+
+    return new Promise<boolean>((resolve) => {
+      windowsRunKey.get(loginItemName, (error: any, item: any) => {
+        if (error || !item?.value) {
+          resolve(false);
+          return;
+        }
+        const command = String(item.value).toLowerCase();
+        resolve(
+          command.includes(loginItemPath.toLowerCase()) &&
+          command.includes('--openashidden')
+        );
+      });
+    });
+  };
+
+  const writeOpenAtLogin = async (enabled: boolean): Promise<boolean> => {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      name: loginItemName,
+      path: loginItemPath,
+      args: loginItemArgs,
+      openAsHidden: true,
+    });
+
+    // 回读系统实际状态，避免菜单显示已切换但注册表未真正写入。
+    await new Promise(resolve => setTimeout(resolve, 80));
+    return readOpenAtLogin();
+  };
+
+  let openAtLogin = await readOpenAtLogin();
+  // 原生 checkbox 会让 Windows 为整个菜单预留一列勾选区，造成明显左侧空白。
+  // 改用普通状态菜单项，并在切换后重建菜单。
+  openAtLogin = Boolean(openAtLogin);
+  const rebuildTrayMenu = () => {
+    const trayMenu = Menu.buildFromTemplate([
+      {
+        label: `开机启动：${openAtLogin ? '已开启' : '已关闭'}`,
+        click: async () => {
+          const requestedState = !openAtLogin;
+          try {
+            const actualState = await writeOpenAtLogin(requestedState);
+            if (actualState !== requestedState) {
+              throw new Error('系统未保存开机启动设置');
+            }
+            openAtLogin = actualState;
+            rebuildTrayMenu();
+            if (Notification.isSupported()) {
+              new Notification({
+                title: 'BucketView',
+                body: openAtLogin ? '已开启开机自动启动' : '已关闭开机自动启动',
+              }).show();
+            }
+          } catch (error) {
+            openAtLogin = await readOpenAtLogin();
+            rebuildTrayMenu();
+            console.error('[main] Failed to update open-at-login setting:', error);
+            if (Notification.isSupported()) {
+              new Notification({
+                title: 'BucketView',
+                body: '开机启动设置失败，请检查系统权限后重试',
+              }).show();
+            }
+          }
+        }
+      },
+      { type: 'separator' },
+      {
+        label: '显示窗口',
+        click: () => {
+          void createWindow();
+        }
+      },
+      { type: 'separator' },
+      {
+        label: '退出程序',
+        click: () => {
+          app.quit();
         }
       }
-    },
-    { type: 'separator' },
-    {
-      label: '显示窗口',
-      click: () => {
-        createWindow();
-      }
-    },
-    { type: 'separator' },
-    {
-      label: '退出程序',
-      click: () => {
-        app.quit();
-      }
-    }
-  ]);
+    ]);
+    tray?.setContextMenu(trayMenu);
+  };
 
-  tray?.setContextMenu(trayMenu);
+  rebuildTrayMenu();
   tray?.setToolTip('BucketView');
+  tray?.on('click', () => {
+    void createWindow();
+  });
 
   if (shouldOpenWindow) {
     return;
@@ -508,11 +564,10 @@ app.whenReady().then(async () => {
   }
 })
 
-if (process.platform === 'darwin') {
-  app.on('before-quit', function () {
-    forceQuit = true;
-  });
-}
+app.on('before-quit', () => {
+  // 系统退出、托盘退出和更新安装属于真正退出，不再触发标题栏关闭策略。
+  forceQuit = true;
+});
 
 app.on('window-all-closed', () => {
   win = null

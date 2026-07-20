@@ -118,6 +118,8 @@ export const useSettingStore = defineStore('setting', {
       defaultDownloadDirectory: "",
       themeMode: 'light',
       listLoadMode: 'waterfall',
+      closeBehavior: 'hide',
+      confirmBeforeExit: true,
       connectionColorGroupId: fallbackColorGroup.id,
       customConnectionColorGroups: [],
     }
@@ -164,6 +166,12 @@ export const useSettingStore = defineStore('setting', {
     },
     setListLoadMode(mode: 'pagination' | 'waterfall') {
       this.listLoadMode = mode;
+    },
+    setCloseBehavior(behavior: 'hide' | 'exit') {
+      this.closeBehavior = behavior;
+    },
+    setConfirmBeforeExit(enabled: boolean) {
+      this.confirmBeforeExit = enabled;
     },
     setConnectionColorGroup(id: string) {
       this.connectionColorGroupId = id;

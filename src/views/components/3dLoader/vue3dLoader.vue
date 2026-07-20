@@ -17,8 +17,8 @@ import {
   PointLight,
   HemisphereLight,
   DirectionalLight,
-  LinearEncoding,
-  sRGBEncoding,
+  LinearSRGBColorSpace,
+  SRGBColorSpace,
   Texture,
   TextureLoader,
   AnimationMixer,
@@ -122,9 +122,7 @@ const props = withDefaults(defineProps<Props>(), {
     return 1;
   },
   crossOrigin: "anonymous",
-  outputColorSpace: () => {
-    return "linear";
-  },
+  outputEncoding: "linear",
   webGLRendererOptions: () => {
     return {};
   },
@@ -347,9 +345,8 @@ function init() {
     renderer = new WebGLRenderer(options);
     // renderer.hadowMapEnabled = true
     renderer.shadowMap.enabled = true;
-    const encoding =
-      outputEncoding === "linear" ? LinearEncoding : sRGBEncoding;
-    renderer.outputEncoding = encoding;
+    renderer.outputColorSpace =
+      outputEncoding === "linear" ? LinearSRGBColorSpace : SRGBColorSpace;
   }
 
   if (!controls || Object.keys(controls).length <= 0) {

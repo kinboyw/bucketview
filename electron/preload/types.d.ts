@@ -356,6 +356,8 @@ export interface Setting {
   defaultDownloadDirectory?: string;
   themeMode?: 'light' | 'dark';
   listLoadMode?: 'pagination' | 'waterfall';
+  closeBehavior?: 'hide' | 'exit';
+  confirmBeforeExit?: boolean;
   connectionColorGroupId?: string;
   customConnectionColorGroups?: ConnectionColorGroup[];
 }

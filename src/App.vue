@@ -7,6 +7,26 @@
       </div>
       <div class="app-main-content-wrapper" :class="{ 'dark-theme': isDarkTheme }"><router-view /></div>
     </a-spin>
+    <a-modal
+      v-model:open="exitConfirmOpen"
+      title="退出 BucketView？"
+      centered
+      :mask-closable="false"
+      :keyboard="false"
+      @cancel="handleExitCancel"
+    >
+      <a-alert
+        type="warning"
+        show-icon
+        message="退出后，后台任务将停止"
+        description="正在进行的上传、下载和挂载相关后台进程将被中断；未完成的传输可在下次启动后从传输列表继续。未保存的预览编辑内容可能丢失。"
+      />
+      <a-checkbox v-model:checked="doNotRemindExit" class="exit-reminder-checkbox">不再提醒</a-checkbox>
+      <template #footer>
+        <a-button @click="handleExitCancel">取消</a-button>
+        <a-button type="primary" danger @click="handleExitConfirm">退出应用</a-button>
+      </template>
+    </a-modal>
   </a-config-provider>
 </template>
 <script lang="ts">
@@ -42,23 +62,46 @@ export default defineComponent({
       tip: '',
     });
     const isDarkTheme = computed(() => settingStore.themeMode === 'dark');
+    const exitConfirmOpen = ref(false);
+    const doNotRemindExit = ref(false);
+
+    const handleExitCancel = () => {
+      exitConfirmOpen.value = false;
+      doNotRemindExit.value = false;
+    };
+
+    const handleExitConfirm = () => {
+      if (doNotRemindExit.value) {
+        settingStore.setConfirmBeforeExit(false);
+      }
+      exitConfirmOpen.value = false;
+      (native as any).ipcSend('confirm-app-close');
+    };
 
     onMounted(() => {
       document.documentElement.setAttribute('data-theme', settingStore.themeMode || 'light');
     });
 
-    // 处理退出弹窗
+    // 标题栏关闭按用户配置执行。默认隐藏到任务栏通知区域，选择退出时可显示后台影响提醒。
     native.ipc("request-app-close", () => {
-      Modal.confirm({
-        title: '提示',
-        content: '退出将中断传输，再次启动时可在传输列表恢复传输',
-        okText: '退出',
-        cancelText: '取消',
-        centered: true,
-        onOk() {
-          (native as any).ipcSend('confirm-app-close');
-        }
-      });
+      const closeBehavior = settingStore.closeBehavior === 'exit' ? 'exit' : 'hide';
+      if (settingStore.closeBehavior !== closeBehavior) {
+        settingStore.setCloseBehavior(closeBehavior);
+      }
+      if (closeBehavior === 'hide') {
+        (native as any).ipcSend('hide-app-window');
+        return;
+      }
+
+      if (settingStore.confirmBeforeExit === false) {
+        (native as any).ipcSend('confirm-app-close');
+        return;
+      }
+
+      if (!exitConfirmOpen.value) {
+        doNotRemindExit.value = false;
+        exitConfirmOpen.value = true;
+      }
     });
 
     // 更新流程：启动时只提示，用户确认后才下载，下载完成后再由用户确认安装。
@@ -123,12 +166,20 @@ export default defineComponent({
       updaterState,
       theme,
       isDarkTheme,
+      exitConfirmOpen,
+      doNotRemindExit,
+      handleExitCancel,
+      handleExitConfirm,
     };
   }
 });
 </script>
 
 <style lang="less">
+.exit-reminder-checkbox {
+  margin-top: 16px;
+}
+
 /* Dark Theme Basic Resets */
 :root[data-theme='dark'] {
   color-scheme: dark;
