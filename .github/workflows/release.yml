@@ -16,31 +16,37 @@ jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
+      GYP_MSVS_VERSION: "2022"
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Windows x64
-            os: windows-latest
+            os: windows-2022
             command: npm run build:win
             artifact: bucketview-windows-x64
+            manifest: latest-win32.yml
           - name: macOS Intel
             os: macos-15-intel
             command: npm run build:mac
             artifact: bucketview-macos-x64
+            manifest: latest-darwin.yml
           - name: Linux x64
             os: ubuntu-latest
             command: npm run build:linux
             artifact: bucketview-linux-x64
+            manifest: latest-linux.yml
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Verify tag matches package version
@@ -73,7 +79,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             release/*.zip
-            release/latest-*.yml
+            release/${{ matrix.manifest }}
           if-no-files-found: error
           retention-days: 7
 
