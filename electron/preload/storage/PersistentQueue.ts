@@ -18,6 +18,7 @@ export default class PersistentQueue extends EventEmitter {
   private dbPath: string;
   private batchSize: number;
   private queue: { id: number; job: any }[] = [];
+  private running = new Map<number, { id: number; job: any }>();
   private length: number | null = null;
   private db: Database.Database | null = null;
   private opened: boolean = false;
@@ -42,24 +43,40 @@ export default class PersistentQueue extends EventEmitter {
     this.on('stop', () => { this.run = false; });
 
     this.on('trigger_next', () => {
-      if (this.debug) console.log('trigger_next');
-      if (!this.run || this.empty) {
-        if (this.debug) console.log('run=' + this.run + ' and empty=' + this.empty);
-        return;
-      }
-      if (this.queue.length === 0 && this.length !== 0) {
-        this.hydrateQueue();
-        setImmediate(() => this.emit('next', this.queue[0]));
-      } else if (this.queue.length) {
-        setImmediate(() => this.emit('next', this.queue[0]));
-      } else {
-        this.emit('empty');
+      if (this.debug) console.log('trigger_next', { run: this.run, active: this.running.size, pending: this.queue.length, length: this.length });
+      if (!this.run) return;
+
+      // Fill pending workers up to batchSize for true concurrency.
+      while (this.run && this.running.size < this.batchSize) {
+        if (this.queue.length === 0) {
+          this.hydrateQueue();
+        }
+        if (this.queue.length === 0) {
+          if (this.running.size === 0) {
+            this.empty = true;
+            this.emit('empty');
+          }
+          break;
+        }
+        const item = this.queue.shift()!;
+        this.running.set(item.id, item);
+        this.empty = false;
+        const payload = item;
+        setImmediate(() => this.emit('next', payload));
       }
     });
 
     this.on('empty', () => {
       this.empty = true;
-      this.db?.exec("VACUUM;");
+      // VACUUM is expensive; only run occasionally when queue drains.
+      try {
+        const now = Date.now();
+        const last = (this as any)._lastVacuumAt || 0;
+        if (now - last > 60_000) {
+          (this as any)._lastVacuumAt = now;
+          this.db?.exec('VACUUM;');
+        }
+      } catch {}
     });
 
     this.on('add', () => {
@@ -76,6 +93,7 @@ export default class PersistentQueue extends EventEmitter {
       this.empty = undefined;
       this.run = false;
       this.queue = [];
+      this.running.clear();
     });
   }
 
@@ -129,10 +147,14 @@ export default class PersistentQueue extends EventEmitter {
   start(): void { this.emit('start'); }
   stop(): void { this.emit('stop'); }
 
-  done(): void {
-    if (this.debug) console.log('Calling done!');
-    this.removeJob();
-    this.length--;
+  done(id?: number): void {
+    if (this.debug) console.log('Calling done!', id);
+    const targetId = id ?? this.running.keys().next().value;
+    if (targetId !== undefined) {
+      this.running.delete(targetId);
+      this.removeJob(targetId);
+      if (this.length !== null && this.length > 0) this.length--;
+    }
     this.emit('trigger_next');
   }
 
@@ -265,8 +287,20 @@ export default class PersistentQueue extends EventEmitter {
 
   private hydrateQueue(): void {
     if (this.db === null) throw new Error('Open queue database before starting queue');
-    const rows = this.db!.prepare(`SELECT * FROM ${TABLE} ORDER BY id ASC LIMIT ?`).all(this.batchSize) as JobRow[];
-    this.queue = rows.map(row => ({ id: row.id, job: JSON.parse(row.job) }));
+    // Keep enough pending jobs to saturate workers.
+    const want = Math.max(this.batchSize * 2, this.batchSize);
+    if (this.queue.length >= want) return;
+    const known = new Set<number>([
+      ...this.queue.map(item => item.id),
+      ...this.running.keys(),
+    ]);
+    const rows = this.db.prepare(`SELECT * FROM ${TABLE} ORDER BY id ASC LIMIT ?`).all(want + known.size) as JobRow[];
+    for (const row of rows) {
+      if (known.has(row.id)) continue;
+      this.queue.push({ id: row.id, job: JSON.parse(row.job) });
+      known.add(row.id);
+      if (this.queue.length >= want) break;
+    }
   }
 
   private searchQueue(job: any): number[] {
@@ -286,9 +320,10 @@ export default class PersistentQueue extends EventEmitter {
           break;
         }
       }
+      this.running.delete(id);
     }
-    if (id !== undefined) {
-      this.db!.prepare(`DELETE FROM ${TABLE} WHERE id = ?`).run(id);
+    if (id !== undefined && this.db) {
+      this.db.prepare(`DELETE FROM ${TABLE} WHERE id = ?`).run(id);
     }
   }
 

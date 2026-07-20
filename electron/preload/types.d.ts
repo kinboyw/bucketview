@@ -172,6 +172,9 @@ export interface PreloadNative {
   fuseBin: () => string;
   ensureRclone: (preferredPath?: string) => Promise<{ success: boolean; path?: string; message?: string; source?: string }>;
   appVersion: () => string;
+  setTransferConcurrency?: (value: number) => void;
+  getLogPath?: () => Promise<{ file: string; directory: string }>;
+  openLogDirectory?: () => Promise<{ success: boolean; message?: string }>;
   ipc: (channel: string, listener: (event: IpcRendererEvent, ...args: UpdaterResponse[]) => void) => void;
   ipcSend: (channel: string, ...args: any[]) => void;
   readLocalFile: (path: string) => string;
@@ -357,6 +360,8 @@ export interface Setting {
   defaultDownloadDirectory?: string;
   themeMode?: 'light' | 'dark';
   listLoadMode?: 'pagination' | 'waterfall';
+  /** Concurrent upload/download workers (1-8). */
+  transferConcurrency?: number;
   closeBehavior?: 'hide' | 'exit';
   confirmBeforeExit?: boolean;
   connectionColorGroupId?: string;

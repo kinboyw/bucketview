@@ -309,6 +309,11 @@
                 <div class="status-bar">
                   <span class="status-item"><FolderOutlined /> {{ directoryCount }} 个目录</span>
                   <span class="status-item"><FileOutlined /> {{ fileCount }} 个文件</span>
+                  <span class="status-item" v-if="listLoadingMore">
+                    <LoadingOutlined spin /> 继续加载中…
+                    <template v-if="listLoadedPages > 0">（第 {{ listLoadedPages }} 批）</template>
+                  </span>
+                  <span class="status-item" v-else-if="tableState.nextContinuationToken">还有更多对象可加载</span>
                   <span class="status-item" v-if="currentDirectoryTotalSize > 0"><DatabaseOutlined /> {{ formatDirectorySize }}</span>
                   <span class="status-item status-endpoint" v-if="activeConnectionEndpoint" :title="activeConnectionEndpoint">
                     <InfoCircleOutlined /> {{ activeConnectionEndpoint }}
@@ -1724,6 +1729,8 @@ export default defineComponent({
     };
 
     let listRequestId = 0;
+    const listLoadingMore = ref(false);
+    const listLoadedPages = ref(0);
     const bucketDirectoryMap: Record<string, string> = {};
     const bucketStateMap: Record<string, {
       tableSource: ObjectInfo[];
@@ -2983,8 +2990,14 @@ export default defineComponent({
       waterfallLimit.value = 100;
     });
 
-    watch(() => filteredSource.value, () => {
-      waterfallLimit.value = 100;
+    watch(() => filteredSource.value, (next, prev) => {
+      // Only reset window when the dataset identity clearly changes (shrink / empty),
+      // not when progressive list pages append more rows.
+      const prevLen = Array.isArray(prev) ? prev.length : 0;
+      const nextLen = Array.isArray(next) ? next.length : 0;
+      if (nextLen === 0 || nextLen < prevLen) {
+        waterfallLimit.value = 100;
+      }
     });
 
     onMounted(() => {
@@ -3526,65 +3539,108 @@ export default defineComponent({
       tableState.breadcrumbDirectory = bcRaw.filter(s => s.length > 0);
       if (!silent) {
         tableState.tableSource = [];
-        tableState.nextContinuationToken = null;
+        tableState.nextContinuationToken = '';
+        listLoadedPages.value = 0;
+        listLoadingMore.value = false;
       }
 
-      // 渐进排序加载：数据在 buffer 中排序积累，正常模式仅在完成时一次性赋值，静默模式同理
-      const buffer: ObjectInfo[] = [];
-      const applyListResult = async (source: ObjectInfo[]) => {
+      // Progressive list loading:
+      // 1) first page paints ASAP
+      // 2) remaining pages continue in background
+      // 3) switching directory bumps listRequestId and cancels stale pages
+      const buffer: ObjectInfo[] = silent ? [...tableState.tableSource] : [];
+      let pages = 0;
+      let firstPaintDone = silent && tableState.tableSource.length > 0;
+
+      const persistBucketState = (token: string | null) => {
+        bucketStateMap[activeConnectionId.value] = {
+          tableSource: [...tableState.tableSource],
+          currentDirectory: tableState.currentDirectory,
+          searchDirectory: tableState.searchDirectory,
+          breadcrumbDirectory: [...tableState.breadcrumbDirectory],
+          searchKeyword: tableState.searchKeyword,
+          nextContinuationToken: token,
+          paginationCurrent: paginationState.current,
+        };
+      };
+
+      const applyListResult = async (source: ObjectInfo[], token: string | null, opts?: { final?: boolean; error?: boolean }) => {
         sortObjectInfos(source);
         const compactedSource = await compactDirectoryChains(source);
         if (requestId !== listRequestId) return;
         sortObjectInfos(compactedSource);
         tableState.tableSource = [...compactedSource];
+        tableState.nextContinuationToken = token;
+        listLoadedPages.value = pages;
         if (!silent) tableState.loading = false;
-        tableState.refreshing = false;
-        bucketStateMap[activeConnectionId.value] = {
-          tableSource: [...compactedSource],
-          currentDirectory: tableState.currentDirectory,
-          searchDirectory: tableState.searchDirectory,
-          breadcrumbDirectory: [...tableState.breadcrumbDirectory],
-          searchKeyword: tableState.searchKeyword,
-          nextContinuationToken: null,
-          paginationCurrent: paginationState.current,
-        };
+        // Keep a light "loading more" indicator while background pages continue.
+        listLoadingMore.value = !opts?.final && !!token;
+        if (opts?.final || !token) {
+          tableState.refreshing = false;
+          listLoadingMore.value = false;
+        }
+        persistBucketState(token);
       };
-      const fetchAll = (token: string | null) => {
+
+      const appendPageObjects = (objectInfos: ObjectInfo[]) => {
+        for (const objectInfo of objectInfos) {
+          if (
+            tableState.currentDirectory == objectInfo.objectName.split('/').slice(0, -1).join('/') ||
+            objectInfo.type == 'directory'
+          ) {
+            buffer.push(objectInfo);
+          }
+        }
+      };
+
+      const fetchPage = (token: string | null) => {
         if (requestId !== listRequestId) return;
         storage
           .listObjects(defaultStorage, tableState.currentDirectory, token)
           .then(async (resp: ListObjectsResponse) => {
             if (requestId !== listRequestId) return;
             if (!resp.success) {
-              notification.error({ message: '加载失败', description: resp.desc });
-              await applyListResult(buffer);
+              if (!silent || !firstPaintDone) {
+                notification.error({ message: '加载失败', description: resp.desc });
+              }
+              await applyListResult(buffer, null, { final: true, error: true });
               return;
             }
 
-            resp.objectInfos.forEach((objectInfo) => {
-              if (
-                tableState.currentDirectory == objectInfo.objectName.split('/').slice(0, -1).join('/') ||
-                objectInfo.type == 'directory'
-              ) {
-                buffer.push(objectInfo);
-              }
-            });
+            pages += 1;
+            appendPageObjects(resp.objectInfos || []);
 
-            sortObjectInfos(buffer);
-
-            if (resp.nextContinuationToken) {
-              fetchAll(resp.nextContinuationToken);
+            const nextToken = resp.nextContinuationToken || null;
+            // First page: paint immediately so large buckets become interactive fast.
+            if (!firstPaintDone) {
+              firstPaintDone = true;
+              await applyListResult(buffer, nextToken, { final: !nextToken });
+            } else if (!nextToken || pages % 2 === 0) {
+              // Refresh UI every 2 pages afterward to reduce reactive churn.
+              await applyListResult(buffer, nextToken, { final: !nextToken });
             } else {
-              await applyListResult(buffer);
+              tableState.nextContinuationToken = nextToken;
+              listLoadedPages.value = pages;
+              listLoadingMore.value = !!nextToken;
+            }
+
+            if (nextToken) {
+              // Yield to UI thread between S3 pages.
+              setTimeout(() => {
+                if (requestId === listRequestId) fetchPage(nextToken);
+              }, 0);
+            } else {
+              await applyListResult(buffer, null, { final: true });
             }
           })
-          .catch(async () => {
+          .catch(async (error) => {
             if (requestId !== listRequestId) return;
-            await applyListResult(buffer);
+            console.warn('[listObjects] page failed:', error);
+            await applyListResult(buffer, null, { final: true, error: true });
           });
       };
 
-      fetchAll('');
+      fetchPage('');
     };
 
     const handleStorageCreateDirectory = () => {
@@ -4484,6 +4540,8 @@ export default defineComponent({
       handleTransferForceOverwrite,
       handleShowTransferDrawer,
       paginationState,
+      listLoadingMore,
+      listLoadedPages,
       handlePaginationChange,
       handlePaginationSizeChange,
     };

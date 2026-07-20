@@ -203,6 +203,10 @@ export default defineComponent({
 
     onMounted(() => {
       document.documentElement.setAttribute('data-theme', settingStore.themeMode || 'light');
+      try {
+        const concurrency = settingStore.transferConcurrency || 3;
+        native.setTransferConcurrency?.(concurrency);
+      } catch {}
     });
 
     native.ipc('request-app-close', () => {

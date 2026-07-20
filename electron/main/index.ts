@@ -10,6 +10,7 @@ import { Fuse } from '../preload/storage/fuse';
 import { Connection, MountTarget } from '../preload/types';
 import Registry from "winreg";
 import { handlerUpdater } from "./updater";
+import { logger } from '../common/logger';
 import {
   PREVIEW_IPC,
   type PreviewDownloadRequest,
@@ -22,6 +23,19 @@ import {
 
 remoteMain.initialize();
 Store.initRenderer();
+
+process.on('uncaughtException', (error) => {
+  logger.error('main', 'uncaughtException', { message: error?.message, stack: error?.stack });
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error('main', 'unhandledRejection', reason instanceof Error ? { message: reason.message, stack: reason.stack } : { reason: String(reason) });
+});
+app.on('render-process-gone', (_event, webContents, details) => {
+  logger.error('main', 'render-process-gone', { reason: details.reason, exitCode: details.exitCode, url: webContents.getURL?.() });
+});
+app.on('child-process-gone', (_event, details) => {
+  logger.error('main', 'child-process-gone', details as any);
+});
 
 // if (Platform.windows()) {
 //   app.setAppUserModelId('app.bucketview.desktop');
@@ -364,6 +378,48 @@ async function createWindow() {
   // 兼容升级前已加载的渲染进程，旧的最小化指令也按隐藏处理。
   ipcMain.removeAllListeners('minimize-app-window');
   ipcMain.on('minimize-app-window', hideMainWindow);
+
+  // Transfer concurrency preference (used by preload transfer queue on next app start /
+  // and exposed for future live reconfiguration).
+  ipcMain.removeAllListeners('renderer-error');
+  ipcMain.on('renderer-error', (_event, payload: any) => {
+    logger.error('renderer', payload?.info || 'renderer-error', payload);
+  });
+
+  try { ipcMain.removeHandler('app-get-log-path'); } catch {}
+  ipcMain.handle('app-get-log-path', () => {
+    return {
+      file: logger.getLogFilePath(),
+      directory: logger.getLogDirectory(),
+    };
+  });
+  try { ipcMain.removeHandler('app-open-log-dir'); } catch {}
+  ipcMain.handle('app-open-log-dir', async () => {
+    const dir = logger.getLogDirectory();
+    if (!dir) return { success: false, message: '日志目录不可用' };
+    const err = await shell.openPath(dir);
+    return err ? { success: false, message: err } : { success: true };
+  });
+
+  ipcMain.removeAllListeners('set-transfer-concurrency');
+  ipcMain.on('set-transfer-concurrency', (_event, value: unknown) => {
+    const n = Math.max(1, Math.min(8, Math.floor(Number(value) || 3)));
+    try {
+      const store = new Store();
+      store.set('app.transferConcurrency', n);
+      process.env.BUCKETVIEW_TRANSFER_CONCURRENCY = String(n);
+      logger.info('transfer', 'concurrency updated', { concurrency: n });
+    } catch (error) {
+      logger.warn('transfer', 'failed to persist concurrency', error);
+    }
+  });
+  try {
+    const store = new Store();
+    const saved = Number(store.get('app.transferConcurrency', 3));
+    if (Number.isFinite(saved) && saved >= 1) {
+      process.env.BUCKETVIEW_TRANSFER_CONCURRENCY = String(Math.min(8, Math.floor(saved)));
+    }
+  } catch {}
 
   ipcMain.removeAllListeners('updater-check');
   ipcMain.on('updater-check', () => {

@@ -303,6 +303,15 @@ contextBridge.exposeInMainWorld('native', {
   appVersion(): string {
     return app.getVersion();
   },
+  setTransferConcurrency(value: number): void {
+    ipcRenderer.send('set-transfer-concurrency', value);
+  },
+  async getLogPath(): Promise<{ file: string; directory: string }> {
+    return ipcRenderer.invoke('app-get-log-path');
+  },
+  async openLogDirectory(): Promise<{ success: boolean; message?: string }> {
+    return ipcRenderer.invoke('app-open-log-dir');
+  },
   ipc(channel: string, listener: (event: IpcRendererEvent, ...args: UpdaterResponse[]) => void): void {
     ipcRenderer.on(channel, listener);
   },

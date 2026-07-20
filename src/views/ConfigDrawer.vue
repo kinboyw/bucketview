@@ -187,6 +187,20 @@
           </div>
         </div>
         <div class="setting-desc">瀑布流模式下通过滚动鼠标加载更多文件；翻页模式下通过页码翻页</div>
+        <div class="setting-form-row" style="margin-top: 10px">
+          <span class="setting-form-label">传输并发数</span>
+          <div class="setting-form-control">
+            <a-select v-model:value="transferConcurrencyValue" size="small" style="width: 120px" @change="handleTransferConcurrencyChange">
+              <a-select-option :value="1">1（串行）</a-select-option>
+              <a-select-option :value="2">2</a-select-option>
+              <a-select-option :value="3">3（推荐）</a-select-option>
+              <a-select-option :value="4">4</a-select-option>
+              <a-select-option :value="6">6</a-select-option>
+              <a-select-option :value="8">8</a-select-option>
+            </a-select>
+          </div>
+        </div>
+        <div class="setting-desc">同时进行的上传/下载任务数。重启应用后完全生效；值越大吞吐越高，也更吃带宽与 CPU。</div>
         <div class="setting-divider"></div>
         <div class="setting-form-row">
           <span class="setting-form-label">关闭主窗口时</span>
@@ -205,6 +219,13 @@
           </div>
           <a-switch v-model:checked="confirmBeforeExitValue" size="small" @change="handleConfirmBeforeExitChange" />
         </div>
+        <div class="setting-form-row" style="margin-top: 10px">
+          <span class="setting-form-label">诊断日志</span>
+          <div class="setting-form-control">
+            <a-button size="small" @click="handleOpenLogDirectory">打开日志目录</a-button>
+          </div>
+        </div>
+        <div class="setting-desc">用于排查崩溃、更新失败、传输异常等问题。日志仅保存在本机。</div>
         <div class="setting-form-row color-group-row">
           <span class="setting-form-label">连接主题色组</span>
           <div class="setting-form-control">
@@ -705,6 +726,7 @@ export default defineComponent({
     const defaultPageSizeValue = ref<number>(settingStore.defaultPageSize || 20);
     const defaultDownloadDirectoryValue = ref<string>(settingStore.defaultDownloadDirectory || '');
     const listLoadModeValue = ref<'pagination' | 'waterfall'>(settingStore.listLoadMode || 'waterfall');
+    const transferConcurrencyValue = ref<number>(settingStore.transferConcurrency || 3);
     const closeBehaviorValue = ref<'hide' | 'exit'>(settingStore.closeBehavior === 'exit' ? 'exit' : 'hide');
     const confirmBeforeExitValue = ref<boolean>(settingStore.confirmBeforeExit !== false);
     const colorGroupIdValue = ref<string>(settingStore.connectionColorGroupId || defaultConnectionColorGroups[0].id);
@@ -1003,8 +1025,19 @@ export default defineComponent({
     const handleDefaultDownloadDirectoryChange = () => { settingStore.setDefaultDownloadDirectory(defaultDownloadDirectoryValue.value); };
     const handleDefaultPageSizeChange = (val: number) => { settingStore.setDefaultPageSize(val); };
     const handleListLoadModeChange = () => { settingStore.setListLoadMode(listLoadModeValue.value); };
+    const handleTransferConcurrencyChange = (val: number) => { settingStore.setTransferConcurrency(val); };
     const handleCloseBehaviorChange = () => { settingStore.setCloseBehavior(closeBehaviorValue.value); };
     const handleConfirmBeforeExitChange = (enabled: boolean) => { settingStore.setConfirmBeforeExit(enabled); };
+    const handleOpenLogDirectory = async () => {
+      try {
+        const resp = await native.openLogDirectory?.();
+        if (resp && resp.success === false) {
+          notification.warning({ message: '无法打开日志目录', description: resp.message || '未知错误' });
+        }
+      } catch (error: any) {
+        notification.error({ message: '打开日志目录失败', description: error?.message || String(error) });
+      }
+    };
 
     // ── Bucket 列表加载 & 过滤 ──
     const allBucketsCache = ref<string[]>([]);
@@ -1509,6 +1542,7 @@ export default defineComponent({
         defaultDownloadDirectoryValue.value = settingStore.defaultDownloadDirectory || '';
         defaultPageSizeValue.value = settingStore.defaultPageSize ?? 20;
         listLoadModeValue.value = settingStore.listLoadMode || 'waterfall';
+        transferConcurrencyValue.value = settingStore.transferConcurrency || 3;
         closeBehaviorValue.value = settingStore.closeBehavior === 'exit' ? 'exit' : 'hide';
         confirmBeforeExitValue.value = settingStore.confirmBeforeExit !== false;
         colorGroupIdValue.value = settingStore.connectionColorGroupId || defaultConnectionColorGroups[0].id;
@@ -1532,7 +1566,7 @@ export default defineComponent({
       handleCheckUpdate, handleDownloadUpdate, handleInstallUpdate,
       flashUploadEnabled, flashUploadThresholdMB,
       fuseBinValue, defaultCacheDirectoryValue, defaultPageSizeValue, defaultDownloadDirectoryValue,
-      listLoadModeValue, closeBehaviorValue, confirmBeforeExitValue, colorGroupIdValue,
+      listLoadModeValue, transferConcurrencyValue, closeBehaviorValue, confirmBeforeExitValue, colorGroupIdValue,
       mountStates, isWindows, allBucketsCache, bucketFetching, availableDrives,
       connectionModalState, connectionModalFormState, connectionModalFormRef,
       connectionModalTitle, connectionIdDisabled,
@@ -1543,7 +1577,7 @@ export default defineComponent({
       handleSelectFuse, handleSelectDefaultCacheDirectory, handleSelectDefaultDownloadDirectory,
       collapsedConnections, toggleConnection,
       handleFuseBinChange, handleDefaultCacheDirectoryChange, handleDefaultDownloadDirectoryChange, handleDefaultPageSizeChange,
-      handleListLoadModeChange, handleCloseBehaviorChange, handleConfirmBeforeExitChange, connectionColorGroups, activeCustomColorGroup,
+      handleListLoadModeChange, handleTransferConcurrencyChange, handleCloseBehaviorChange, handleConfirmBeforeExitChange, handleOpenLogDirectory, connectionColorGroups, activeCustomColorGroup,
       normalizeHexColor, handleConnectionColorGroupChange, handleCopyColorGroup, syncActiveCustomColorGroup,
       handleAddColorToGroup, handleRemoveColorFromGroup, handleColorPickerInput, handleColorHexBlur, handleDeleteCustomColorGroup,
       filterBucketOption, handleBucketFocus, retryFetchBuckets, bucketListFailed, handleTargetBucketFocus, retryFetchBucketsTarget,

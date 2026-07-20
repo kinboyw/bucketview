@@ -118,6 +118,7 @@ export const useSettingStore = defineStore('setting', {
       defaultDownloadDirectory: "",
       themeMode: 'light',
       listLoadMode: 'waterfall',
+      transferConcurrency: 3,
       closeBehavior: 'hide',
       confirmBeforeExit: true,
       connectionColorGroupId: fallbackColorGroup.id,
@@ -166,6 +167,13 @@ export const useSettingStore = defineStore('setting', {
     },
     setListLoadMode(mode: 'pagination' | 'waterfall') {
       this.listLoadMode = mode;
+    },
+    setTransferConcurrency(value: number) {
+      const n = Math.max(1, Math.min(8, Math.floor(Number(value) || 3)));
+      this.transferConcurrency = n;
+      try {
+        (window as any).native?.setTransferConcurrency?.(n);
+      } catch {}
     },
     setCloseBehavior(behavior: 'hide' | 'exit') {
       this.closeBehavior = behavior;

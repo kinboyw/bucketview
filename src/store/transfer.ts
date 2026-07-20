@@ -48,8 +48,20 @@ export const useTransferStore = defineStore('transfer', {
   actions: {
     setRecord(uid: string, data: TransferInfo) {
       this.queue[uid] = data;
+      // Persist terminal / non-progress updates immediately; throttle progress writes.
       const storage = (window as any).storage as PreloadStorage;
-      if (storage?.upsertTransferRecord) {
+      if (!storage?.upsertTransferRecord) return;
+      const isProgressOnly = data.status === 'running' && data.percentage !== undefined;
+      if (!isProgressOnly) {
+        storage.upsertTransferRecord(uid, data);
+        return;
+      }
+      const g = globalThis as any;
+      if (!g.__bvTransferPersistAt) g.__bvTransferPersistAt = Object.create(null);
+      const now = Date.now();
+      const last = g.__bvTransferPersistAt[uid] || 0;
+      if (now - last >= 1000) {
+        g.__bvTransferPersistAt[uid] = now;
         storage.upsertTransferRecord(uid, data);
       }
     },

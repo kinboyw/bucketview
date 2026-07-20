@@ -18,6 +18,29 @@ export interface TransferOptions extends TransferObjectOption {
 }
 
 const noop: any = () => false
+const DEFAULT_TRANSFER_CONCURRENCY = 3
+const MAX_TRANSFER_CONCURRENCY = 8
+
+function resolveTransferConcurrency(): number {
+  try {
+    const raw = process.env.BUCKETVIEW_TRANSFER_CONCURRENCY
+    if (raw) {
+      const n = Number(raw)
+      if (Number.isFinite(n) && n >= 1) return Math.min(MAX_TRANSFER_CONCURRENCY, Math.floor(n))
+    }
+  } catch {}
+  try {
+    // Prefer main-process persisted preference via electron-store.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Store = require('electron-store')
+    const store = new Store()
+    const saved = Number(store.get('app.transferConcurrency', DEFAULT_TRANSFER_CONCURRENCY))
+    if (Number.isFinite(saved) && saved >= 1) {
+      return Math.min(MAX_TRANSFER_CONCURRENCY, Math.floor(saved))
+    }
+  } catch {}
+  return DEFAULT_TRANSFER_CONCURRENCY
+}
 
 // Global cancel map: uid → boolean. When UI sets cancel, this map marks it true.
 const cancelledUids: Map<string, boolean> = new Map();
@@ -67,7 +90,7 @@ export class Transfer {
       nodeFs.mkdirSync(dbDir, { recursive: true });
     } catch {}
     const dbPath = nodePath.join(dbDir, 'transfer-queue.sqlite');
-    this.transferQueue = new PersistentQueue(dbPath, 1)
+    this.transferQueue = new PersistentQueue(dbPath, resolveTransferConcurrency())
     this.transferQueue.setDebug(false)
     this.transferQueue.on("next", ({ id, job }) => {
       const stor = this.storages[job.key || 'minio']
@@ -112,7 +135,7 @@ export class Transfer {
           .catch(handleError)
           .finally(() => {
             this.eventBus.emit('download', { type: "end", ...job })
-            this.transferQueue.done()
+            this.transferQueue.done(id)
             // Clean up cancel mark after job finishes
             if (job.uid) clearCancel(job.uid);
           });
@@ -135,7 +158,7 @@ export class Transfer {
           .catch(handleError)
           .finally(() => {
             this.eventBus.emit('upload', { type: "end", ...job })
-            this.transferQueue.done()
+            this.transferQueue.done(id)
             if (job.uid) clearCancel(job.uid);
           });
       }
