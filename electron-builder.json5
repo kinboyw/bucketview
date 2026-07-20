@@ -21,20 +21,33 @@
   "files": [
     "dist-electron",
     "dist",
+    // Keep package small: exclude native source trees and docs.
     "!**/node_modules/better-sqlite3/deps/**",
     "!**/node_modules/better-sqlite3/src/**",
     "!**/node_modules/better-sqlite3/build/Release/obj/**",
+    "!**/node_modules/better-sqlite3/build/Release/*.lib",
+    "!**/node_modules/better-sqlite3/build/Release/*.exp",
+    "!**/node_modules/better-sqlite3/build/Release/*.iobj",
+    "!**/node_modules/better-sqlite3/build/Release/*.ipdb",
     "!**/node_modules/better-sqlite3/**/*.{md,markdown,ts,map}",
-    "!**/node_modules/**/{test,tests,__tests__,docs,doc,example,examples,demo,demos,coverage}/**",
+    // koffi binaries are pruned per-platform in scripts/after-pack-prune.js
+    "!**/node_modules/koffi/vendor/**",
+    "!**/node_modules/koffi/doc/**",
+    "!**/node_modules/koffi/src/**",
+    "!**/node_modules/koffi/**/*.{md,markdown,ts,map}",
+    "!**/node_modules/**/{test,tests,__tests__,docs,doc,example,examples,demo,demos,coverage,benchmark,benchmarks}/**",
     "!**/node_modules/**/*.{md,markdown,ts,map}",
-    "!**/node_modules/**/LICENSE*",
-    "!**/node_modules/**/CHANGELOG*"
+    "!**/node_modules/**/{LICENSE,LICENCE,license,licence,CHANGELOG,Changelog,changelog,README,Readme,readme}*",
+    "!**/node_modules/**/*.d.ts",
+    "!**/node_modules/**/tsconfig*.json",
+    "!**/node_modules/**/.{eslintrc,prettierrc,editorconfig,npmignore,gitignore}*"
   ],
   "electronLanguages": [
     "en-US",
     "zh-CN"
   ],
   "compression": "maximum",
+  "afterPack": "./scripts/after-pack-prune.js",
   "afterAllArtifactBuild":"./generate-latest-yml.js",
   "mac": {
     "icon": "public/favicon.icns",
@@ -82,3 +95,4 @@
     ]
   }
 }
+
