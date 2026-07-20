@@ -364,10 +364,17 @@ async function createWindow() {
   ipcMain.removeAllListeners('minimize-app-window');
   ipcMain.on('minimize-app-window', hideMainWindow);
 
-  ipcMain.on('updater-download', () => {
-    handlerUpdater.download(win.webContents);
+  ipcMain.removeAllListeners('updater-check');
+  ipcMain.on('updater-check', () => {
+    void handlerUpdater.check(win.webContents, undefined, true);
   });
 
+  ipcMain.removeAllListeners('updater-download');
+  ipcMain.on('updater-download', () => {
+    void handlerUpdater.download(win.webContents);
+  });
+
+  ipcMain.removeAllListeners('updater-install');
   ipcMain.on('updater-install', async () => {
     const state = await handlerUpdater.installDownloaded(win.webContents);
     if (state) {

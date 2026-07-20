@@ -408,6 +408,10 @@ export interface DriveDataInterface {
   name: string | undefined;
 }
 
+export interface UpdaterCheckingResponse {
+  cmd: 'checking';
+}
+
 export interface UpdaterAvailableResponse {
   cmd: 'update-available';
   version: string;
@@ -439,6 +443,7 @@ export interface UpdaterErrorResponse {
 }
 
 export type UpdaterResponse =
+  | UpdaterCheckingResponse
   | UpdaterAvailableResponse
   | UpdaterNotAvailableResponse
   | UpdaterProgressResponse

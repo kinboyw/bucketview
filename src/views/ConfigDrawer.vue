@@ -254,6 +254,101 @@
       </div>
     </div>
 
+    <!-- 关于 -->
+    <div v-if="activeTab === 'about'" class="drawer-content">
+      <div class="setting-card about-card">
+        <div class="about-header">
+          <img src="/favicon.svg" alt="logo" class="about-logo" />
+          <div class="about-title-block">
+            <div class="about-app-name">BucketView</div>
+            <div class="about-app-desc">面向对象存储的跨平台桌面管理工具</div>
+          </div>
+        </div>
+
+        <div class="setting-divider"></div>
+
+        <div class="about-info-list">
+          <div class="about-info-row">
+            <span class="about-info-label">当前版本</span>
+            <span class="about-info-value">v{{ appVersion }}</span>
+          </div>
+          <div class="about-info-row">
+            <span class="about-info-label">运行平台</span>
+            <span class="about-info-value">{{ appPlatform }}</span>
+          </div>
+          <div class="about-info-row">
+            <span class="about-info-label">构建信息</span>
+            <span class="about-info-value">{{ buildInfo }}</span>
+          </div>
+          <div class="about-info-row">
+            <span class="about-info-label">许可证</span>
+            <span class="about-info-value">MIT License</span>
+          </div>
+        </div>
+
+        <div class="setting-divider"></div>
+
+        <div class="about-update-block">
+          <div class="about-update-title">版本更新</div>
+          <div class="about-update-status">{{ updateStatusText }}</div>
+          <div v-if="updateDownloading" class="about-progress">
+            <a-progress :percent="updateProgress" size="small" :show-info="true" />
+          </div>
+          <div class="about-update-actions">
+            <button
+              type="button"
+              class="about-action-btn about-action-btn-primary"
+              :class="{ 'is-loading': updateChecking }"
+              :disabled="updateChecking || updateDownloading || updateInstalling"
+              @click="handleCheckUpdate"
+            >
+              <span v-if="updateChecking" class="about-action-spinner"></span>
+              <span>{{ updateChecking ? '检查中...' : '检查更新' }}</span>
+            </button>
+            <button
+              v-if="updateAvailableVersion && !updateDownloaded"
+              type="button"
+              class="about-action-btn"
+              :class="{ 'is-loading': updateDownloading }"
+              :disabled="updateChecking || updateDownloading || updateInstalling"
+              @click="handleDownloadUpdate"
+            >
+              <span v-if="updateDownloading" class="about-action-spinner"></span>
+              <span>{{ updateDownloading ? '下载中...' : '下载更新' }}</span>
+            </button>
+            <button
+              v-if="updateDownloaded"
+              type="button"
+              class="about-action-btn about-action-btn-primary"
+              :class="{ 'is-loading': updateInstalling }"
+              :disabled="updateChecking || updateDownloading || updateInstalling"
+              @click="handleInstallUpdate"
+            >
+              <span v-if="updateInstalling" class="about-action-spinner"></span>
+              <span>{{ updateInstalling ? '安装中...' : '安装更新' }}</span>
+            </button>
+          </div>
+          <div class="setting-desc">检查到新版本后可后台下载，下载完成后可手动安装；安装时应用会退出并完成替换。</div>
+        </div>
+
+        <div class="setting-divider"></div>
+
+        <div class="about-copyright">
+          <div class="about-copyright-title">版权声明</div>
+          <div class="about-copyright-text">
+            Copyright © 2023-{{ copyrightYear }} BucketView Contributors. All rights reserved.
+          </div>
+          <div class="about-copyright-text">
+            本软件基于 MIT 协议开源发布，允许在遵守协议的前提下自由使用、复制、修改与分发。软件按“现状”提供，不作任何明示或暗示担保。
+          </div>
+          <div class="about-copyright-text">
+            项目主页：
+            <a class="about-link" href="https://github.com/kinboyw/bucketview" target="_blank" rel="noreferrer">github.com/kinboyw/bucketview</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 添加/编辑连接 Modal -->
     <a-modal
       :open="connectionModalState.visible"
@@ -536,7 +631,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, reactive, ref, computed, watch, onUnmounted, toRaw } from 'vue';
+import { defineComponent, reactive, ref, computed, watch, onMounted, onUnmounted, toRaw } from 'vue';
 import {
   PlusOutlined,
   ImportOutlined,
@@ -552,7 +647,7 @@ import {
   CaretDownOutlined,
   CaretRightOutlined,
 } from '@ant-design/icons-vue';
-import { Connection, ConnectionColorGroup, MountTarget, PreloadStorage, PreloadNative, PreloadFuse } from '../../electron/preload/types';
+import { Connection, ConnectionColorGroup, MountTarget, PreloadStorage, PreloadNative, PreloadFuse, UpdaterResponse } from '../../electron/preload/types';
 import { FormInstance, notification } from 'ant-design-vue';
 import { defaultStorage, useConfigStore } from '../store/config';
 import { defaultConnectionColorGroups, useSettingStore } from '../store/setting';
@@ -630,7 +725,120 @@ export default defineComponent({
       { key: 'bucket', label: '连接' },
       { key: 'transfer', label: '传输' },
       { key: 'system', label: '系统' },
+      { key: 'about', label: '关于' },
     ];
+
+    const appVersion = ref(native.appVersion() || '0.0.0');
+    const appPlatform = ref(native.osType() || '-');
+    const copyrightYear = new Date().getFullYear();
+    const buildInfo = computed(() => `v${appVersion.value} / ${appPlatform.value}`);
+    const updateChecking = ref(false);
+    const updateDownloading = ref(false);
+    const updateInstalling = ref(false);
+    const updateProgress = ref(0);
+    const updateAvailableVersion = ref('');
+    const updateDownloaded = ref(false);
+    const updateStatusText = ref('点击“检查更新”查询是否有新版本');
+
+    const handleCheckUpdate = () => {
+      if (updateChecking.value || updateDownloading.value || updateInstalling.value) return;
+      updateChecking.value = true;
+      updateStatusText.value = '正在检查更新...';
+      (window as any).__bucketViewUpdateSource = 'check';
+      native.ipcSend('updater-check');
+    };
+
+    const handleDownloadUpdate = () => {
+      if (!updateAvailableVersion.value || updateDownloading.value || updateInstalling.value) return;
+      updateDownloading.value = true;
+      updateProgress.value = 0;
+      updateStatusText.value = `正在后台下载 v${updateAvailableVersion.value}...`;
+      (window as any).__bucketViewUpdateSource = 'download';
+      native.ipcSend('updater-download');
+    };
+
+    const handleInstallUpdate = () => {
+      if (!updateDownloaded.value || updateInstalling.value) return;
+      updateInstalling.value = true;
+      updateStatusText.value = '正在准备安装更新...';
+      (window as any).__bucketViewUpdateSource = null;
+      native.ipcSend('updater-install');
+    };
+
+    const isAboutUpdateSource = (source: 'check' | 'download') =>
+      (window as any).__bucketViewUpdateSource === source;
+
+    const handleAboutUpdater = (_event: any, resp: UpdaterResponse) => {
+      if (resp.cmd === 'checking') {
+        if (!(updateChecking.value || isAboutUpdateSource('check'))) return;
+        updateChecking.value = true;
+        updateStatusText.value = '正在检查更新...';
+        return;
+      }
+      if (resp.cmd === 'update-available') {
+        const fromManualCheck = updateChecking.value || isAboutUpdateSource('check');
+        updateChecking.value = false;
+        updateAvailableVersion.value = resp.version;
+        updateDownloaded.value = false;
+        updateStatusText.value = `发现新版本 v${resp.version}，可手动下载更新`;
+        if (fromManualCheck) {
+          notification.info({
+            message: '发现新版本',
+            description: `v${resp.version} 可下载更新`,
+          });
+        }
+        return;
+      }
+      if (resp.cmd === 'update-not-available') {
+        if (!(updateChecking.value || isAboutUpdateSource('check'))) return;
+        updateChecking.value = false;
+        updateAvailableVersion.value = '';
+        updateDownloaded.value = false;
+        updateStatusText.value = `当前已是最新版本（v${resp.version || appVersion.value}）`;
+        notification.success({
+          message: '已是最新版本',
+          description: `当前版本 v${resp.version || appVersion.value}`,
+        });
+        return;
+      }
+      if (resp.cmd === 'download-progress') {
+        updateChecking.value = false;
+        updateDownloading.value = true;
+        updateProgress.value = Number(resp.parent || 0);
+        updateStatusText.value = `正在后台下载更新包...${resp.parent}%`;
+        return;
+      }
+      if (resp.cmd === 'update-downloaded') {
+        updateChecking.value = false;
+        updateDownloading.value = false;
+        updateProgress.value = 100;
+        updateDownloaded.value = true;
+        updateAvailableVersion.value = resp.version;
+        updateStatusText.value = `新版本 v${resp.version} 已下载完成，可安装更新`;
+        return;
+      }
+      if (resp.cmd === 'installing') {
+        updateInstalling.value = true;
+        updateStatusText.value = '正在安装更新，应用即将退出...';
+        return;
+      }
+      if (resp.cmd === 'error') {
+        const wasActive =
+          updateChecking.value ||
+          updateDownloading.value ||
+          updateInstalling.value ||
+          isAboutUpdateSource('check') ||
+          isAboutUpdateSource('download');
+        if (!wasActive) return;
+        const wasChecking = updateChecking.value || isAboutUpdateSource('check');
+        updateChecking.value = false;
+        updateDownloading.value = false;
+        updateInstalling.value = false;
+        updateStatusText.value = wasChecking
+          ? `检查更新失败：${resp.message}`
+          : `更新失败：${resp.message}`;
+      }
+    };
 
     const connectionColorGroups = computed(() => settingStore.connectionColorGroups);
     const activeCustomColorGroup = computed(() =>
@@ -1298,10 +1506,17 @@ export default defineComponent({
       if (!val) connectionModalFormState.value.pathPrefix = '';
     });
     const intervalId = setInterval(handleCheckMounts, 5000);
+    onMounted(() => {
+      native.ipc('handler-updater', handleAboutUpdater);
+    });
     onUnmounted(() => clearInterval(intervalId));
 
     return {
       configStore, activeTab, tabs, endpointProtocol, drawerOpen,
+      appVersion, appPlatform, copyrightYear, buildInfo,
+      updateChecking, updateDownloading, updateInstalling, updateProgress,
+      updateAvailableVersion, updateDownloaded, updateStatusText,
+      handleCheckUpdate, handleDownloadUpdate, handleInstallUpdate,
       flashUploadEnabled, flashUploadThresholdMB,
       fuseBinValue, defaultCacheDirectoryValue, defaultPageSizeValue, defaultDownloadDirectoryValue,
       listLoadModeValue, closeBehaviorValue, confirmBeforeExitValue, colorGroupIdValue,
@@ -1436,6 +1651,146 @@ export default defineComponent({
   &:hover { color: var(--ant-color-text-secondary); border-color: var(--ant-color-text-quaternary); background: var(--ant-color-bg-container); }
 }
 .drawer-empty { margin: 40px 0; }
+
+.about-card {
+  .about-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .about-logo {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+  .about-title-block { min-width: 0; }
+  .about-app-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ant-color-text);
+    line-height: 1.3;
+  }
+  .about-app-desc {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--ant-color-text-tertiary);
+  }
+  .about-info-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .about-info-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+  }
+  .about-info-label {
+    color: var(--ant-color-text-secondary);
+    flex-shrink: 0;
+  }
+  .about-info-value {
+    color: var(--ant-color-text);
+    text-align: right;
+    word-break: break-all;
+  }
+  .about-update-block {
+    .about-update-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ant-color-text-secondary);
+      margin-bottom: 6px;
+    }
+    .about-update-status {
+      font-size: 12px;
+      color: var(--ant-color-text);
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+    .about-progress { margin-bottom: 10px; }
+    .about-update-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+  }
+  .about-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 88px;
+    height: 28px;
+    padding: 0 12px;
+    border: 1px solid var(--ant-color-border);
+    border-radius: 6px;
+    background: var(--ant-color-bg-container);
+    color: var(--ant-color-text-secondary);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+    user-select: none;
+    -webkit-app-region: no-drag;
+
+    &:hover:not(:disabled) {
+      color: var(--ant-color-text);
+      border-color: var(--ant-color-text-quaternary);
+      background: var(--ant-color-fill-tertiary);
+    }
+    &:active:not(:disabled) { background: var(--ant-color-fill-secondary); }
+    &:disabled { cursor: not-allowed; opacity: 0.55; }
+    &.is-loading { cursor: progress; }
+  }
+  .about-action-btn-primary {
+    border-color: color-mix(in srgb, var(--ant-color-text-secondary) 35%, var(--ant-color-border));
+    background: var(--ant-color-fill-quaternary);
+    color: var(--ant-color-text);
+    font-weight: 600;
+    &:hover:not(:disabled) {
+      color: var(--ant-color-text);
+      border-color: var(--ant-color-text-tertiary);
+      background: var(--ant-color-fill-tertiary);
+    }
+  }
+  .about-action-spinner {
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: about-spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+  .about-copyright {
+    .about-copyright-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ant-color-text-secondary);
+      margin-bottom: 6px;
+    }
+    .about-copyright-text {
+      font-size: 11px;
+      color: var(--ant-color-text-tertiary);
+      line-height: 1.6;
+      margin-bottom: 6px;
+      &:last-child { margin-bottom: 0; }
+    }
+  }
+  .about-link {
+    color: var(--ant-color-text-secondary);
+    text-decoration: underline;
+    &:hover { color: var(--ant-color-text); }
+  }
+}
+
+@keyframes about-spin {
+  to { transform: rotate(360deg); }
+}
 
 .setting-card {
   background: var(--ant-color-bg-container); border: 1px solid var(--ant-color-border); border-radius: 6px; padding: 12px;

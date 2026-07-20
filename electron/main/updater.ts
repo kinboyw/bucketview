@@ -1,4 +1,4 @@
-import { WebContents, app } from 'electron';
+import { BrowserWindow, Notification, WebContents, app } from 'electron';
 import { Platform, sleep } from '../common';
 import axios from 'axios';
 import YAML from 'yaml';
@@ -58,16 +58,29 @@ const calculateSha512 = (filePath: string) => new Promise<string>((resolve, reje
 
 class HandlerUpdater {
   private updateInfo?: PendingUpdate;
+  private downloading = false;
+  private updateNotification?: Notification;
 
   public async check(
     contents: WebContents,
     feedURL: string = process.env.BUCKETVIEW_UPDATE_FEED_URL || DEFAULT_UPDATE_FEED_URL,
+    interactive = false,
   ): Promise<boolean> {
-    if (process.env.VITE_DEV_SERVER_URL) return false;
-    if (!AUTO_INSTALL_PLATFORMS.has(nodeOs.platform())) return false;
+    if (interactive) contents.send('handler-updater', { cmd: 'checking' });
+    if (process.env.VITE_DEV_SERVER_URL) {
+      if (interactive) contents.send('handler-updater', { cmd: 'error', message: '开发模式下不执行在线更新检查' });
+      return false;
+    }
+    if (!AUTO_INSTALL_PLATFORMS.has(nodeOs.platform())) {
+      if (interactive) contents.send('handler-updater', { cmd: 'error', message: '当前平台暂不支持自动更新' });
+      return false;
+    }
 
     const normalizedFeedURL = normalizeFeedURL(feedURL);
-    if (!normalizedFeedURL) return false;
+    if (!normalizedFeedURL) {
+      if (interactive) contents.send('handler-updater', { cmd: 'error', message: '更新地址未配置' });
+      return false;
+    }
 
     const latestFileName = `latest-${nodeOs.platform()}.yml`;
     const latestURL = `${normalizedFeedURL}/${latestFileName}`;
@@ -94,8 +107,7 @@ class HandlerUpdater {
 
       const file = parsed.files.find(item => item.name.endsWith('.zip') && item.arch === nodeOs.arch());
       if (!file) {
-        console.warn(`[updater] No ${nodeOs.platform()}/${nodeOs.arch()} asset in ${latestURL}`);
-        return false;
+        throw new Error(`未找到适用于 ${nodeOs.platform()}/${nodeOs.arch()} 的更新包`);
       }
 
       this.updateInfo = {
@@ -111,13 +123,17 @@ class HandlerUpdater {
       });
       return true;
     } catch (error) {
-      // 启动检查失败不打扰用户；下载或安装阶段的错误仍会显示通知。
-      console.warn(`[updater] Update check failed: ${getErrorMessage(error)}`);
+      // 启动检查失败不打扰用户；手动检查时需要向用户反馈。
+      const message = getErrorMessage(error);
+      console.warn(`[updater] Update check failed: ${message}`);
+      if (interactive) contents.send('handler-updater', { cmd: 'error', message });
       return false;
     }
   }
 
   public async download(contents: WebContents): Promise<boolean> {
+    if (this.downloading) return false;
+    this.downloading = true;
     try {
       if (!this.updateInfo) throw new Error('未找到可下载的更新');
 
@@ -161,6 +177,26 @@ class HandlerUpdater {
         cmd: 'update-downloaded',
         version: this.updateInfo.version,
       });
+
+      const targetWindow = BrowserWindow.fromWebContents(contents);
+      if (targetWindow && (!targetWindow.isVisible() || !targetWindow.isFocused()) && Notification.isSupported()) {
+        this.updateNotification?.close();
+        const updateNotification = new Notification({
+          title: `BucketView ${this.updateInfo.version} 已下载`,
+          body: '点击打开 BucketView，并选择是否立即安装更新。',
+        });
+        this.updateNotification = updateNotification;
+        updateNotification.on('click', () => {
+          if (targetWindow.isDestroyed()) return;
+          if (targetWindow.isMinimized()) targetWindow.restore();
+          targetWindow.show();
+          targetWindow.focus();
+        });
+        updateNotification.on('close', () => {
+          if (this.updateNotification === updateNotification) this.updateNotification = undefined;
+        });
+        updateNotification.show();
+      }
       return true;
     } catch (error) {
       contents.send('handler-updater', {
@@ -168,6 +204,8 @@ class HandlerUpdater {
         message: getErrorMessage(error),
       });
       return false;
+    } finally {
+      this.downloading = false;
     }
   }
 
