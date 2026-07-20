@@ -21,6 +21,9 @@
   "files": [
     "dist-electron",
     "dist",
+    "!dist/favicon_b.*",
+    "!dist/favicon_w.*",
+    "!dist/**/*.map",
     // Keep package small: exclude native source trees and docs.
     "!**/node_modules/better-sqlite3/deps/**",
     "!**/node_modules/better-sqlite3/src/**",

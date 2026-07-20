@@ -789,7 +789,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, reactive, computed, onMounted, onUnmounted, watch, ref, createVNode, nextTick, toRaw } from 'vue';
+import { defineAsyncComponent, defineComponent, reactive, computed, onMounted, onUnmounted, watch, ref, createVNode, nextTick, toRaw } from 'vue';
 import { AutoComplete, Modal, TableColumnType, notification, theme } from 'ant-design-vue';
 import {
   ArrowUpOutlined,
@@ -871,20 +871,19 @@ import { defaultStorage, useConfigStore } from '../store/config';
 import { useSettingStore } from '../store/setting';
 import { useTransferStore, TransferInfo } from '../store/transfer';
 import { useAuditStore } from '../store/audit';
-import VideoPlayer from './VideoPlayer.vue';
 import _ from 'lodash';
 import { getFileExtenstion, getFileType } from '../common/file';
-import pdf from './PdfViewer.vue';
-import TextEditor from './TextEditor.vue';
 import ImageGallery from './ImageGallery.vue';
-import ModelViewer from './ModelViewer.vue';
 import ConfigDrawer from './ConfigDrawer.vue';
 import AuditLogModal from './AuditLogModal.vue';
-import VueOfficeDocx from '@vue-office/docx';
-import '@vue-office/docx/lib/index.css';
-import VueOfficeExcel from '@vue-office/excel';
-import '@vue-office/excel/lib/index.css';
-import VueOfficePptx from '@vue-office/pptx';
+
+const VideoPlayer = defineAsyncComponent(() => import('./VideoPlayer.vue'));
+const pdf = defineAsyncComponent(() => import('./PdfViewer.vue'));
+const TextEditor = defineAsyncComponent(() => import('./TextEditor.vue'));
+const ModelViewer = defineAsyncComponent(() => import('./ModelViewer.vue'));
+const VueOfficeDocx = defineAsyncComponent(() => import('./components/office/DocxPreview.vue'));
+const VueOfficeExcel = defineAsyncComponent(() => import('./components/office/ExcelPreview.vue'));
+const VueOfficePptx = defineAsyncComponent(() => import('./components/office/PptxPreview.vue'));
 
 interface NavPopupCacheEntry {
   dirs: NavPopupItem[];

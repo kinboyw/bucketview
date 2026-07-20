@@ -50,7 +50,7 @@ export default defineConfig(({ command, mode }) => {
               minify: isBuild,
               outDir: 'dist-electron/main',
               rollupOptions: {
-                external: ['electron', 'better-sqlite3'],
+                external: ['electron', 'better-sqlite3', 'koffi'],
               },
             },
           },
@@ -68,7 +68,7 @@ export default defineConfig(({ command, mode }) => {
               minify: isBuild,
               outDir: 'dist-electron/preload',
               rollupOptions: {
-                external: ['electron', 'better-sqlite3', '@aws-sdk/client-s3', '@aws-sdk/lib-storage', '@aws-sdk/s3-request-presigner', '@smithy/node-http-handler', 'koffi'],
+                external: ['electron', 'better-sqlite3', 'koffi'],
                 output: {
                   inlineDynamicImports: true,
                 },
@@ -82,6 +82,9 @@ export default defineConfig(({ command, mode }) => {
     ],
     build: {
       modulePreload: { polyfill: false },
+      chunkSizeWarningLimit: 4000,
+      // Keep sourcemaps out of release artifacts.
+      sourcemap: false,
       rollupOptions: {
         input: {
           main: resolve(__dirname, 'index.html'),

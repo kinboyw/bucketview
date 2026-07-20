@@ -129,7 +129,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { theme } from 'ant-design-vue';
 import {
   ArrowDownOutlined,
@@ -139,16 +139,14 @@ import {
   FullscreenExitOutlined,
   PlayCircleOutlined,
 } from '@ant-design/icons-vue';
-import VueOfficeDocx from '@vue-office/docx';
-import '@vue-office/docx/lib/index.css';
-import VueOfficeExcel from '@vue-office/excel';
-import '@vue-office/excel/lib/index.css';
-import VueOfficePptx from '@vue-office/pptx';
 import ImageGallery from '../views/ImageGallery.vue';
-import ModelViewer from '../views/ModelViewer.vue';
-import PdfViewer from '../views/PdfViewer.vue';
-import TextEditor from '../views/TextEditor.vue';
-import VideoPlayer from '../views/VideoPlayer.vue';
+const VueOfficeDocx = defineAsyncComponent(() => import('../views/components/office/DocxPreview.vue'));
+const VueOfficeExcel = defineAsyncComponent(() => import('../views/components/office/ExcelPreview.vue'));
+const VueOfficePptx = defineAsyncComponent(() => import('../views/components/office/PptxPreview.vue'));
+const ModelViewer = defineAsyncComponent(() => import('../views/ModelViewer.vue'));
+const PdfViewer = defineAsyncComponent(() => import('../views/PdfViewer.vue'));
+const TextEditor = defineAsyncComponent(() => import('../views/TextEditor.vue'));
+const VideoPlayer = defineAsyncComponent(() => import('../views/VideoPlayer.vue'));
 import type { PreloadPreviewWindow, PreviewWindowPayload } from '../../electron/preload/types';
 
 const PREVIEW_TITLEBAR_HEIGHT = 32;
