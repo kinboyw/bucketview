@@ -73,7 +73,9 @@ function updateRecord(queue: PersistentQueue, job: any, status: string, errorDes
 export class Transfer {
   private transferQueue: PersistentQueue;
   private storages: { [key: string]: Storage } = {};
-  private eventBus: any
+  private eventBus: any;
+  private pendingJobs: TransferOptions[] = [];
+  private flushingPending = false;
 
   constructor(storages: { [key: string]: Storage }, eventBus: any) {
     this.storages = storages
@@ -166,17 +168,53 @@ export class Transfer {
     this.transferQueue.open()
       .then(() => {
         this.transferQueue.start()
+        this.flushPendingJobs()
       })
       .catch((error) => {
         console.error('[Transfer] failed to open queue database:', error)
       })
   }
 
+  public whenReady(): Promise<void> {
+    return this.transferQueue.whenReady();
+  }
+
+  public isReady(): boolean {
+    return this.transferQueue.isOpen();
+  }
+
   public Add(job: TransferOptions) {
-    this.transferQueue.add(job)
+    if (!this.transferQueue.isOpen()) {
+      this.pendingJobs.push(job);
+      this.flushPendingJobs();
+      return;
+    }
+    this.enqueueJob(job);
+  }
+
+  private enqueueJob(job: TransferOptions) {
+    this.transferQueue.add(job);
     if (job.record) {
       this.transferQueue.upsertTransferRecord(job.record.uid, job.record);
     }
+  }
+
+  private flushPendingJobs() {
+    if (this.flushingPending) return;
+    this.flushingPending = true;
+    void this.transferQueue.whenReady()
+      .then(() => {
+        const jobs = this.pendingJobs.splice(0, this.pendingJobs.length);
+        for (const job of jobs) this.enqueueJob(job);
+      })
+      .catch((error) => {
+        console.error('[Transfer] pending jobs dropped; queue failed to open:', error);
+        this.pendingJobs = [];
+      })
+      .finally(() => {
+        this.flushingPending = false;
+        if (this.pendingJobs.length && this.transferQueue.isOpen()) this.flushPendingJobs();
+      });
   }
 
   // ── Transfer records (UI persistence) ──

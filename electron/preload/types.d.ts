@@ -145,6 +145,8 @@ export interface PreloadStorage {
   upsertTransferRecord: (uid: string, data: any) => void;
   listTransferRecords: (offset: number, limit: number) => any[];
   countTransferRecords: () => number;
+  isTransferReady?: () => boolean;
+  waitTransferReady?: () => Promise<void>;
   deleteTransferRecord: (uid: string) => void;
   clearTransferRecords: () => void;
   recoverInterrupted: () => any[];

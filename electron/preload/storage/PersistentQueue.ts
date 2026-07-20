@@ -23,9 +23,19 @@ export default class PersistentQueue extends EventEmitter {
   private db: Database.Database | null = null;
   private opened: boolean = false;
   private run: boolean = false;
+  private openReady: Promise<void>;
+  private resolveOpenReady: (() => void) | null = null;
+  private rejectOpenReady: ((err: any) => void) | null = null;
+  private openFailed: Error | null = null;
 
   constructor(filename: string, batchSize?: number) {
     super();
+    this.openReady = new Promise<void>((resolve, reject) => {
+      this.resolveOpenReady = resolve;
+      this.rejectOpenReady = reject;
+    });
+    // Avoid unhandled rejection if open fails before any waiter attaches.
+    this.openReady.catch(() => {});
     if (filename === undefined) throw new Error('No filename parameter provided');
     this.dbPath = (filename === '') ? ':memory:' : filename;
     this.batchSize = (batchSize === undefined) ? 10 : batchSize;
@@ -127,8 +137,15 @@ export default class PersistentQueue extends EventEmitter {
         this.hydrateQueue();
         this.empty = (this.queue.length === 0);
         this.emit('open');
+        this.resolveOpenReady?.();
+        this.resolveOpenReady = null;
+        this.rejectOpenReady = null;
         resolve(this.queue);
       } catch (err) {
+        this.openFailed = err instanceof Error ? err : new Error(String(err));
+        this.rejectOpenReady?.(this.openFailed);
+        this.resolveOpenReady = null;
+        this.rejectOpenReady = null;
         reject(err);
       }
     });
@@ -164,7 +181,11 @@ export default class PersistentQueue extends EventEmitter {
   }
 
   add(job: any): number {
-    const stmt = this.db!.prepare(`INSERT INTO ${TABLE} (job) VALUES (?)`);
+    if (this.db === null) {
+      console.warn('[PersistentQueue] add skipped: database not open yet');
+      return -1;
+    }
+    const stmt = this.db.prepare(`INSERT INTO ${TABLE} (job) VALUES (?)`);
     const info = stmt.run(JSON.stringify(job));
     const id = info.lastInsertRowid as number;
     this.length++;
@@ -173,7 +194,11 @@ export default class PersistentQueue extends EventEmitter {
   }
 
   addFailed(job: any): number {
-    const stmt = this.db!.prepare(`INSERT INTO ${TABLE_FAILED} (job) VALUES (?)`);
+    if (this.db === null) {
+      console.warn('[PersistentQueue] addFailed skipped: database not open yet');
+      return -1;
+    }
+    const stmt = this.db.prepare(`INSERT INTO ${TABLE_FAILED} (job) VALUES (?)`);
     const info = stmt.run(JSON.stringify(job));
     const id = info.lastInsertRowid as number;
     this.emit('failed', { id, job });
@@ -181,7 +206,11 @@ export default class PersistentQueue extends EventEmitter {
   }
 
   addSucceeded(job: any): number {
-    const stmt = this.db!.prepare(`INSERT INTO ${TABLE_SUCCEEDED} (job) VALUES (?)`);
+    if (this.db === null) {
+      console.warn('[PersistentQueue] addSucceeded skipped: database not open yet');
+      return -1;
+    }
+    const stmt = this.db.prepare(`INSERT INTO ${TABLE_SUCCEEDED} (job) VALUES (?)`);
     const info = stmt.run(JSON.stringify(job));
     const id = info.lastInsertRowid as number;
     this.emit('succeeded', { id, job });
@@ -201,11 +230,18 @@ export default class PersistentQueue extends EventEmitter {
   isStarted(): boolean { return this.run; }
   isOpen(): boolean { return this.opened; }
 
+  whenReady(): Promise<void> {
+    if (this.opened) return Promise.resolve();
+    if (this.openFailed) return Promise.reject(this.openFailed);
+    return this.openReady;
+  }
+
   has(id: number): boolean {
     for (let i = 0; i < this.queue.length; i++) {
       if (this.queue[i].id === id) return true;
     }
-    const row = this.db!.prepare(`SELECT id FROM ${TABLE} WHERE id = ?`).get(id) as { id: number } | undefined;
+    if (this.db === null) return false;
+    const row = this.db.prepare(`SELECT id FROM ${TABLE} WHERE id = ?`).get(id) as { id: number } | undefined;
     return row !== undefined;
   }
 

@@ -158,6 +158,12 @@ contextBridge.exposeInMainWorld('storage', {
   countTransferRecords() {
     return transfer.countTransferRecords();
   },
+  isTransferReady() {
+    return transfer.isReady();
+  },
+  waitTransferReady() {
+    return transfer.whenReady();
+  },
   deleteTransferRecord(uid: string) {
     transfer.deleteTransferRecord(uid);
   },

@@ -76,6 +76,28 @@ export const useTransferStore = defineStore('transfer', {
       if (this.loaded) return;
       const storage = (window as any).storage as PreloadStorage;
       if (!storage?.listTransferRecords) return;
+
+      // Wait for queue DB to finish opening (max ~8s) before reading history.
+      if (storage.waitTransferReady) {
+        try {
+          await Promise.race([
+            storage.waitTransferReady(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('transfer queue open timeout')), 8000)),
+          ]);
+        } catch (error) {
+          console.warn('[transfer] queue not ready yet:', error);
+          // Keep loaded=false so a later mount/retry can still hydrate.
+          return;
+        }
+      } else if (storage.isTransferReady && !storage.isTransferReady()) {
+        // Poll briefly for older builds without waitTransferReady.
+        const deadline = Date.now() + 8000;
+        while (Date.now() < deadline && !storage.isTransferReady()) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        if (!storage.isTransferReady()) return;
+      }
+
       try {
         const total = storage.countTransferRecords?.() ?? 0;
         this.queue = reactive<map>({});
@@ -85,7 +107,7 @@ export const useTransferStore = defineStore('transfer', {
           const records = storage.listTransferRecords(offset, PAGE_SIZE) || [];
           for (const r of records) {
             if (r && r.uid) {
-              // Skip records still in active queue (they'll be recovered)
+              // Interrupted in-flight jobs are recovered separately from the active queue.
               if (r.status === 'running' || r.status === 'waiting') {
                 r.status = 'error';
                 r.errorDesc = '传输中断（应用退出）';
@@ -99,8 +121,7 @@ export const useTransferStore = defineStore('transfer', {
       } catch (error) {
         // better-sqlite3 / queue may still be opening or failed in packaged builds.
         console.warn('[transfer] loadFromStorage failed:', error);
-        this.queue = reactive<map>({});
-        this.loaded = true;
+        // Do not mark loaded so startup can retry after DB becomes ready.
       }
     },
     clean() {

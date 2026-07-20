@@ -888,6 +888,7 @@ import StringUtil from '../common/stringUtil';
 import { v4 as uuidv4 } from 'uuid';
 import { defaultStorage, useConfigStore } from '../store/config';
 import { sortObjectInfos } from '../common/object-list';
+import { formatTransferSize, formatTransferTime, sortTransferEntries } from '../common/transfer-list';
 import { useSettingStore } from '../store/setting';
 import { useTransferStore, TransferInfo } from '../store/transfer';
 import { useAuditStore } from '../store/audit';
@@ -1922,8 +1923,14 @@ export default defineComponent({
     let mountCheckTimer: ReturnType<typeof setInterval> | null = null;
 
     onMounted(async () => {
-      // Load transfer records from SQLite
+      // Load transfer records from SQLite (retry if queue DB is still opening).
       await transferStore.loadFromStorage();
+      if (!transferStore.loaded) {
+        for (let i = 0; i < 20 && !transferStore.loaded; i++) {
+          await new Promise((r) => setTimeout(r, 250));
+          await transferStore.loadFromStorage();
+        }
+      }
 
       window.addEventListener('resize', handleResize);
       window.addEventListener('click', handleClickOutside);
@@ -3055,28 +3062,8 @@ export default defineComponent({
     };
     const transferUploadSpeed = computed(() => formatSpeed(sumTransferSpeed('upload')));
     const transferDownloadSpeed = computed(() => formatSpeed(sumTransferSpeed('download')));
-    const formatTransferSize = (value: TransferInfo) => {
-      if (!value.totalBytes) return '-';
-      return StringUtil.formatFileSize(value.totalBytes);
-    };
-    const formatTransferTime = (value: TransferInfo) => {
-      if (!value.completedAt) return '';
-      const diff = Date.now() - value.completedAt;
-      const seconds = Math.floor(diff / 1000);
-      if (seconds < 60) return `${seconds}秒前`;
-      const minutes = Math.floor(seconds / 60);
-      if (minutes < 60) return `${minutes}分钟前`;
-      const hours = Math.floor(minutes / 60);
-      if (hours < 24) return `${hours}小时前`;
-      const days = Math.floor(hours / 24);
-      return `${days}天前`;
-    };
     const transferListEntries = computed(() =>
-      Object.entries(transferStore.queue).sort((a, b) => {
-        const ta = a[1].createdAt || 0;
-        const tb = b[1].createdAt || 0;
-        return tb - ta;
-      })
+      sortTransferEntries(Object.entries(transferStore.queue) as [string, TransferInfo][])
     );
 
     // Lightweight windowing for large transfer history (no extra deps).
@@ -3810,6 +3797,29 @@ export default defineComponent({
       });
     };
 
+    // Coalesce high-frequency transfer progress events to one UI write per frame.
+    const pendingTransferProgress = new Map<string, any>();
+    let transferProgressRaf = 0;
+    const flushTransferProgressPatches = () => {
+      transferProgressRaf = 0;
+      pendingTransferProgress.forEach((patch, uid) => {
+        const current = transferStore.queue[uid];
+        if (!current) return;
+        if (current.status === 'success' || current.status === 'error' || current.status === 'cancel') return;
+        Object.assign(current, patch);
+      });
+      pendingTransferProgress.clear();
+    };
+    const applyTransferProgressPatch = (uid: string, patch: Record<string, any>) => {
+      const prev = pendingTransferProgress.get(uid) || {};
+      pendingTransferProgress.set(uid, { ...prev, ...patch });
+      if (!transferProgressRaf) {
+        transferProgressRaf = (typeof requestAnimationFrame === 'function'
+          ? requestAnimationFrame(flushTransferProgressPatches)
+          : setTimeout(flushTransferProgressPatches, 16) as unknown as number);
+      }
+    };
+
     const handlerUploadCallback = (event: any) => {
       const { uid, prefix } = event;
       const tmpTransferInfo = transferStore.queue[uid];
@@ -3823,6 +3833,7 @@ export default defineComponent({
 
       switch (event.status) {
         case 'success':
+          pendingTransferProgress.delete(uid);
           // 当前目录或其子路径下的上传完成都应刷新列表
           const cleanPrefix = StringUtil.trim(prefix || '', '/');
           const currentDir = tableState.currentDirectory;
@@ -3856,6 +3867,7 @@ export default defineComponent({
 
           break;
         case 'error':
+          pendingTransferProgress.delete(uid);
           Object.assign(transferStore.queue[uid], {
             status: 'error',
             errorDesc: event.desc || '未知错误',
@@ -3869,7 +3881,7 @@ export default defineComponent({
           });
           break;
         case 'running':
-          Object.assign(transferStore.queue[uid], {
+          applyTransferProgressPatch(uid, {
             status: 'running',
             percentage: event.percentage,
             speed: event.speed,
@@ -4120,6 +4132,7 @@ export default defineComponent({
         return;
       switch (event.status) {
         case 'success':
+          pendingTransferProgress.delete(uid);
           Object.assign(transferStore.queue[uid], {
             status: 'success',
             percentage: 100,
@@ -4127,6 +4140,7 @@ export default defineComponent({
           });
           break;
         case 'error':
+          pendingTransferProgress.delete(uid);
           Object.assign(transferStore.queue[uid], {
             status: 'error',
             errorDesc: event.desc || '未知错误',
@@ -4143,7 +4157,7 @@ export default defineComponent({
           if (tmpTransferInfo.consumedBytes != undefined && event.consumedBytes < tmpTransferInfo.consumedBytes) {
             return;
           }
-          Object.assign(transferStore.queue[uid], {
+          applyTransferProgressPatch(uid, {
             status: 'running',
             percentage: event.percentage,
             speed: event.speed,
