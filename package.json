@@ -1,7 +1,7 @@
 {
   "name": "bucketview",
   "productName": "BucketView",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "main": "dist-electron/main/index.js",
   "description": "A cross-platform desktop client for S3-compatible object storage.",
   "author": "Kinboy",
@@ -27,6 +27,7 @@
     "build:mac": "vite build && electron-builder --mac --x64 --publish never",
     "build:mac:docker": "docker rmi bucketview_macos:$npm_package_version ; docker build -t bucketview_macos:$npm_package_version -f Dockerfile.macos . && docker run -d -it --rm --name bucketview_macos  bucketview_macos:$npm_package_version && docker cp bucketview_macos:/project/release . && docker stop bucketview_macos",
     "build:win": "vite build && electron-builder --win --x64 --publish never",
+    "rebuild:native": "electron-builder install-app-deps",
     "build:linux": "vite build && electron-builder --linux --x64 --publish never",
     "build:win:docker": "docker rmi bucketview_windows:$npm_package_version ; docker build -t bucketview_windows:$npm_package_version -f Dockerfile.windows . && docker run -d -it --rm --name bucketview_windows  bucketview_windows:$npm_package_version && docker cp bucketview_windows:/project/release . && docker stop bucketview_windows",
     "preview": "vite preview",

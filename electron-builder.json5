@@ -12,14 +12,29 @@
     "**/node_modules/node-addon-api/**/*",
     "**/node_modules/koffi/**/*"
   ],
-  "npmRebuild": false,
+  // Rebuild native addons against the packaged Electron ABI.
+  // Required: CI system Node (MODULE 127) != Electron 30 (MODULE 123).
+  "npmRebuild": true,
   "directories": {
     "output": "release"
   },
   "files": [
     "dist-electron",
-    "dist"
+    "dist",
+    "!**/node_modules/better-sqlite3/deps/**",
+    "!**/node_modules/better-sqlite3/src/**",
+    "!**/node_modules/better-sqlite3/build/Release/obj/**",
+    "!**/node_modules/better-sqlite3/**/*.{md,markdown,ts,map}",
+    "!**/node_modules/**/{test,tests,__tests__,docs,doc,example,examples,demo,demos,coverage}/**",
+    "!**/node_modules/**/*.{md,markdown,ts,map}",
+    "!**/node_modules/**/LICENSE*",
+    "!**/node_modules/**/CHANGELOG*"
   ],
+  "electronLanguages": [
+    "en-US",
+    "zh-CN"
+  ],
+  "compression": "maximum",
   "afterAllArtifactBuild":"./generate-latest-yml.js",
   "mac": {
     "icon": "public/favicon.icns",

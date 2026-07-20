@@ -55,6 +55,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Rebuild native modules for Electron
+        run: npx electron-builder install-app-deps
+
       - name: Prepare Linux rclone
         if: runner.os == 'Linux'
         shell: bash
@@ -127,3 +130,4 @@ jobs:
             --verify-tag \
             --generate-notes \
             --title "BucketView ${GITHUB_REF_NAME#v}"
+
