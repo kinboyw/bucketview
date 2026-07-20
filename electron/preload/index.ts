@@ -122,8 +122,8 @@ contextBridge.exposeInMainWorld('storage', {
       ...createTransferJob(key, storage, options),
     });
   },
-  listObjects(key: string, prefix: string, startAfter: string): Promise<ListObjectsResponse> {
-    return storages[key]?.listObjects(prefix, startAfter);
+  listObjects(key: string, prefix: string, startAfter: string, options?: { abortSignal?: AbortSignal }): Promise<ListObjectsResponse> {
+    return storages[key]?.listObjects(prefix, startAfter, options);
   },
   deleteObject(key: string, filenames: string[]): Promise<DeleteObjectResponse> {
     return storages[key]?.deleteObject(filenames);

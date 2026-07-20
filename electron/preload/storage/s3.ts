@@ -396,7 +396,7 @@ export class S3Storage implements Storage {
   /** 根目录虚拟层：bucket 为空时，根目录列出有权限的桶 */
   private _virtualBuckets: string[] = [];
 
-  async listObjects(prefix: string, nextContinuationToken: string | null): Promise<ListObjectsResponse> {
+  async listObjects(prefix: string, nextContinuationToken: string | null, options?: { abortSignal?: AbortSignal }): Promise<ListObjectsResponse> {
     try {
       // ── 虚拟桶目录层：connection 未指定 bucket 且在根级 ──
       if (!this.bucket && !prefix) {
@@ -412,14 +412,19 @@ export class S3Storage implements Storage {
       }
 
       // ── 正常 bucket 内列表 ──
-      return this._listObjectsInBucket(prefix, nextContinuationToken);
-    } catch (err) {
-      return { success: false, objectInfos: [], desc: err.message as string }
+      return this._listObjectsInBucket(prefix, nextContinuationToken, options);
+    } catch (err: any) {
+      const name = err?.name || '';
+      const message = (err?.message || String(err)) as string;
+      if (name === 'AbortError' || /aborted|abort/i.test(message)) {
+        return { success: false, objectInfos: [], desc: 'aborted' };
+      }
+      return { success: false, objectInfos: [], desc: message }
     }
   }
 
   /** bucket 内部的 listObjects 实现 */
-  private async _listObjectsInBucket(prefix: string, nextContinuationToken: string | null): Promise<ListObjectsResponse> {
+  private async _listObjectsInBucket(prefix: string, nextContinuationToken: string | null, options?: { abortSignal?: AbortSignal }): Promise<ListObjectsResponse> {
     const { bucket = '' } = this;
     const effectivePrefix = this.resolveKey(prefix);
 
@@ -433,7 +438,7 @@ export class S3Storage implements Storage {
     if (effectivePrefix.length > 0) input.Prefix = effectivePrefix.endsWith('/') ? effectivePrefix : `${effectivePrefix}/`;
     if (nextContinuationToken.length > 0) input.ContinuationToken = nextContinuationToken;
     const command = new ListObjectsV2Command(input);
-    const response = await this.s3Client.send(command);
+    const response = await this.s3Client.send(command, options?.abortSignal ? { abortSignal: options.abortSignal } : undefined);
 
     const listObjects: ListObjectsResponse = { success: true, objectInfos: [] };
 

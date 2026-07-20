@@ -58,8 +58,8 @@ export class StorageBridge extends EventEmitter{
       });
     }
 
-    listObjects(key: string, prefix: string, startAfter: string): Promise<ListObjectsResponse> {
-      return this.storages[key]?.listObjects(prefix, startAfter);
+    listObjects(key: string, prefix: string, startAfter: string, options?: { abortSignal?: AbortSignal }): Promise<ListObjectsResponse> {
+      return this.storages[key]?.listObjects(prefix, startAfter, options);
     }
 
     deleteObject(key: string, filenames: string[]): Promise<DeleteObjectResponse> {

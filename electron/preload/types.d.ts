@@ -114,7 +114,7 @@ export interface Storage {
   /** 检查远程对象是否存在及元数据 */
   headObject: (objectName: string) => Promise<HeadObjectResponse>;
   /** 获取对象列表 */
-  listObjects: (prefix: string, nextContinuationToken: string | null) => Promise<ListObjectsResponse>;
+  listObjects: (prefix: string, nextContinuationToken: string | null, options?: { abortSignal?: AbortSignal }) => Promise<ListObjectsResponse>;
   /** 删除对象 */
   deleteObject: (objectNames: string[]) => Promise<DeleteObjectResponse>;
   /** 签名对象 */
@@ -134,7 +134,7 @@ export interface PreloadStorage {
   getObject: (key: string, options: TransferObjectOption) => void;
   putObject: (key: string, options: TransferObjectOption) => void;
   headObject: (key: string, objectName: string) => Promise<HeadObjectResponse>;
-  listObjects: (key: string, prefix: string, nextContinuationToken: string | null) => Promise<ListObjectsResponse>;
+  listObjects: (key: string, prefix: string, nextContinuationToken: string | null, options?: { abortSignal?: AbortSignal }) => Promise<ListObjectsResponse>;
   deleteObject: (key: string, objectNames: string[]) => Promise<DeleteObjectResponse>;
   signObject: (key: string, objectName: string) => Promise<SignObjectResponse>;
   createDirectory: (key: string, prefix: string) => Promise<CreateDirectoryResponse>;
