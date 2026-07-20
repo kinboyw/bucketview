@@ -151,8 +151,50 @@ export const useConfigStore = defineStore('config', {
   persist: {
     key: 'config',
     storage: localStorage,
+    serializer: {
+      serialize(value) {
+        try {
+          const native = (window as any).native as { encryptSecret?: (v: string) => string } | undefined;
+          const clone = JSON.parse(JSON.stringify(value));
+          if (Array.isArray(clone.connections) && native?.encryptSecret) {
+            clone.connections = clone.connections.map((conn: any) => ({
+              ...conn,
+              accessKeySecret: native.encryptSecret?.(conn.accessKeySecret || '') || conn.accessKeySecret,
+            }));
+          }
+          return JSON.stringify(clone);
+        } catch {
+          return JSON.stringify(value);
+        }
+      },
+      deserialize(value) {
+        try {
+          const native = (window as any).native as { decryptSecret?: (v: string) => string } | undefined;
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed.connections) && native?.decryptSecret) {
+            parsed.connections = parsed.connections.map((conn: any) => ({
+              ...conn,
+              accessKeySecret: native.decryptSecret?.(conn.accessKeySecret || '') || conn.accessKeySecret,
+            }));
+          }
+          return parsed;
+        } catch {
+          return JSON.parse(value);
+        }
+      },
+    },
     afterHydrate: (ctx) => {
       const store = ctx.store as ReturnType<typeof useConfigStore>;
+      // Ensure in-memory secrets are plaintext even if hydrate raced ahead of preload.
+      try {
+        const native = (window as any).native as { decryptSecret?: (v: string) => string } | undefined;
+        if (native?.decryptSecret && Array.isArray(store.connections)) {
+          store.connections = store.connections.map((conn) => ({
+            ...conn,
+            accessKeySecret: native.decryptSecret?.(conn.accessKeySecret || '') || conn.accessKeySecret,
+          }));
+        }
+      } catch {}
       if (!store.activeTabConnectionIds) {
         store.activeTabConnectionIds = [];
       }
@@ -180,6 +222,10 @@ export const useConfigStore = defineStore('config', {
       if (store.activeConnectionId && !store.activeTabConnectionIds.includes(store.activeConnectionId)) {
         store.activeConnectionId = store.activeTabConnectionIds.length > 0 ? store.activeTabConnectionIds[store.activeTabConnectionIds.length - 1] : "";
       }
+      // Re-persist to encrypt any legacy plaintext secrets already in localStorage.
+      try {
+        (store as any).$persist?.();
+      } catch {}
     },
   },
 });

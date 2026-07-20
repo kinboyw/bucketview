@@ -619,9 +619,15 @@
           <span><CloudUploadOutlined class="summary-upload-icon" /> 上传 {{ transferUploadSpeed }}</span>
           <span><CloudDownloadOutlined class="summary-download-icon" /> 下载 {{ transferDownloadSpeed }}</span>
           <span class="transfer-summary-spacer"></span>
+          <a-tooltip title="重试全部失败任务">
+            <a-button type="text" size="small" :disabled="failedTransferCount === 0" @click="handleRetryAllFailedTransfers" class="recover-btn">
+              <template #icon><ReloadOutlined /></template>
+              <span v-if="failedTransferCount > 0" style="margin-left: 2px">{{ failedTransferCount }}</span>
+            </a-button>
+          </a-tooltip>
           <a-tooltip title="恢复中断的传输任务">
             <a-button type="text" size="small" @click="handleRecoverInterrupted" class="recover-btn">
-              <template #icon><ReloadOutlined /></template>
+              <template #icon><ThunderboltOutlined /></template>
             </a-button>
           </a-tooltip>
           <a-tooltip title="清除记录">
@@ -794,7 +800,7 @@
 </template>
 
 <script lang="ts">
-import { defineAsyncComponent, defineComponent, reactive, computed, onMounted, onUnmounted, watch, ref, createVNode, nextTick, toRaw } from 'vue';
+import { defineAsyncComponent, defineComponent, reactive, computed, onMounted, onUnmounted, watch, ref, shallowRef, triggerRef, createVNode, nextTick, toRaw } from 'vue';
 import { AutoComplete, Modal, TableColumnType, notification, theme } from 'ant-design-vue';
 import {
   ArrowUpOutlined,
@@ -1364,7 +1370,7 @@ export default defineComponent({
         saveNavHistory(oldConnectionId);
         bucketDirectoryMap[oldConnectionId] = tableState.currentDirectory || '/';
         bucketStateMap[oldConnectionId] = {
-          tableSource: [...tableState.tableSource],
+          tableSource: [...tableSource.value],
           currentDirectory: tableState.currentDirectory,
           searchDirectory: tableState.searchDirectory,
           breadcrumbDirectory: [...tableState.breadcrumbDirectory],
@@ -1381,7 +1387,7 @@ export default defineComponent({
       restoreNavHistory(connectionId);
       if (cached) {
         // 先恢复缓存状态，用户立即看到旧视图（无 loading）
-        tableState.tableSource = [...cached.tableSource];
+        setTableSource([...(cached.tableSource || [])]);
         tableState.currentDirectory = cached.currentDirectory;
         tableState.searchDirectory = cached.searchDirectory;
         tableState.breadcrumbDirectory = [...cached.breadcrumbDirectory];
@@ -2399,6 +2405,8 @@ export default defineComponent({
     }>({ current: 1, pageSize: settingStore.defaultPageSize || 20 });
 
     // 文件列表
+    // tableSource is shallow to avoid deep reactive overhead on large S3 listings.
+    const tableSource = shallowRef<ObjectInfo[]>([]);
     const tableState = reactive<{
       loading: boolean;
       refreshing: boolean;
@@ -2407,14 +2415,12 @@ export default defineComponent({
       searchKeyword: string;
       breadcrumbDirectory: string[];
       nextContinuationToken: string | null;
-      tableSource: ObjectInfo[];
       selectedRowKeys: Key[];
       selectedRows: ObjectInfo[];
     }>({
       loading: false,
       refreshing: false,
       nextContinuationToken: '',
-      tableSource: [],
       currentDirectory: '',
       searchDirectory: '/',
       searchKeyword: '',
@@ -2422,6 +2428,10 @@ export default defineComponent({
       selectedRowKeys: [],
       selectedRows: [],
     });
+    const setTableSource = (rows: ObjectInfo[]) => {
+      tableSource.value = rows;
+      triggerRef(tableSource);
+    };
 
     interface TransferContextSnapshot {
       connectionId: string;
@@ -2967,8 +2977,8 @@ export default defineComponent({
 
     const filteredSource = computed(() => {
       const kw = tableState.searchKeyword.trim().toLowerCase();
-      if (!kw) return tableState.tableSource;
-      return tableState.tableSource.filter(item => item.name.toLowerCase().includes(kw));
+      if (!kw) return tableSource.value;
+      return tableSource.value.filter(item => item.name.toLowerCase().includes(kw));
     });
     const filteredSourceLength = computed(() => filteredSource.value.length);
     const tableLocale = computed(() => tableState.loading ? { emptyText: ' ' } : undefined);
@@ -3261,7 +3271,7 @@ export default defineComponent({
       const dirs = tableState.breadcrumbDirectory;
       if (dirs.length === 0) return [];
       // 当前目录下的同级目录名
-      const siblingNames = tableState.tableSource
+      const siblingNames = tableSource.value
         .filter(o => o.type === 'directory')
         .map(o => o.name);
       const prefixLen = siblingNames.length > 1 ? longestCommonPrefixLen(siblingNames) : 0;
@@ -3538,7 +3548,7 @@ export default defineComponent({
       const bcRaw = StringUtil.trim(tableState.currentDirectory, '/').split('/');
       tableState.breadcrumbDirectory = bcRaw.filter(s => s.length > 0);
       if (!silent) {
-        tableState.tableSource = [];
+        setTableSource([]);
         tableState.nextContinuationToken = '';
         listLoadedPages.value = 0;
         listLoadingMore.value = false;
@@ -3548,13 +3558,13 @@ export default defineComponent({
       // 1) first page paints ASAP
       // 2) remaining pages continue in background
       // 3) switching directory bumps listRequestId and cancels stale pages
-      const buffer: ObjectInfo[] = silent ? [...tableState.tableSource] : [];
+      const buffer: ObjectInfo[] = silent ? [...tableSource.value] : [];
       let pages = 0;
-      let firstPaintDone = silent && tableState.tableSource.length > 0;
+      let firstPaintDone = silent && tableSource.value.length > 0;
 
       const persistBucketState = (token: string | null) => {
         bucketStateMap[activeConnectionId.value] = {
-          tableSource: [...tableState.tableSource],
+          tableSource: [...tableSource.value],
           currentDirectory: tableState.currentDirectory,
           searchDirectory: tableState.searchDirectory,
           breadcrumbDirectory: [...tableState.breadcrumbDirectory],
@@ -3569,7 +3579,7 @@ export default defineComponent({
         const compactedSource = await compactDirectoryChains(source);
         if (requestId !== listRequestId) return;
         sortObjectInfos(compactedSource);
-        tableState.tableSource = [...compactedSource];
+        setTableSource([...compactedSource]);
         tableState.nextContinuationToken = token;
         listLoadedPages.value = pages;
         if (!silent) tableState.loading = false;
@@ -3699,7 +3709,10 @@ export default defineComponent({
               const prefix = tableState.currentDirectory;
               if (prefix == tableState.currentDirectory) {
                 objectNames.forEach((objectName) => {
-                  _.remove(tableState.tableSource, (objInfo) => objInfo.objectName == objectName);
+                  {
+                    const next = tableSource.value.filter((objInfo) => objInfo.objectName != objectName);
+                    setTableSource(next);
+                  }
                 });
               }
               // 精准 VFS 刷新：失效被删文件缓存 + 验证删除结果
@@ -3926,7 +3939,7 @@ export default defineComponent({
       officePresentationMode.value = false;
 
       if (fileType === 'image') {
-        const imageObjects = tableState.tableSource.filter(
+        const imageObjects = tableSource.value.filter(
           item => item.type !== 'directory' && getFileType(getFileExtenstion(item.objectName) || '') === 'image'
         );
         const idx = imageObjects.findIndex(item => item.objectName === objInfo.objectName);
@@ -4222,6 +4235,23 @@ export default defineComponent({
         storage.getObject(defaultStorage, Object.assign({}, toRaw(ensureTransferRecordContext(t)), { forceOverwrite: true }));
       }
     };
+
+    const failedTransferCount = computed(() =>
+      Object.values(transferStore.queue).filter((item) => item.status === 'error' || item.status === 'cancel').length
+    );
+
+    const handleRetryAllFailedTransfers = () => {
+      const failed = Object.entries(transferStore.queue)
+        .filter(([, item]) => item.status === 'error' || item.status === 'cancel')
+        .map(([uid]) => uid);
+      if (failed.length === 0) {
+        notification.info({ message: '没有失败的传输任务' });
+        return;
+      }
+      failed.forEach((uid) => handleTransferRetry(uid));
+      notification.success({ message: `已重新排队 ${failed.length} 个失败任务` });
+    };
+
 
     const handleTransferForceOverwrite = (uid: string) => {
       const t = transferStore.queue[uid];
@@ -4537,6 +4567,8 @@ export default defineComponent({
       handleFileTransferCancel,
       handleOpenLocalFile,
       handleTransferRetry,
+      handleRetryAllFailedTransfers,
+      failedTransferCount,
       handleTransferForceOverwrite,
       handleShowTransferDrawer,
       paginationState,

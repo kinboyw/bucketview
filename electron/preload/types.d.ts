@@ -175,6 +175,8 @@ export interface PreloadNative {
   setTransferConcurrency?: (value: number) => void;
   getLogPath?: () => Promise<{ file: string; directory: string }>;
   openLogDirectory?: () => Promise<{ success: boolean; message?: string }>;
+  encryptSecret?: (value: string) => string;
+  decryptSecret?: (value: string) => string;
   ipc: (channel: string, listener: (event: IpcRendererEvent, ...args: UpdaterResponse[]) => void) => void;
   ipcSend: (channel: string, ...args: any[]) => void;
   readLocalFile: (path: string) => string;

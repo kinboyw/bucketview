@@ -25,7 +25,8 @@ import nodePath from 'node:path';
 import { Fuse } from './storage/fuse';
 import nodeOs from 'node:os';
 import { Platform } from '../common';
-import { ensureRcloneBinary, managedRclonePath, bundledRclonePath } from '../common/rclone-bin';
+import { ensureRcloneBinary, managedRclonePath, bundledRclonePath } from '../common/rclone-bin'
+import { decryptSecret as decryptSecretValue, encryptSecret as encryptSecretValue } from '../common/secret-crypto';
 import fse from 'fs-extra';
 import { stat } from 'original-fs';
 import { constant } from 'lodash';
@@ -302,6 +303,12 @@ contextBridge.exposeInMainWorld('native', {
   },
   appVersion(): string {
     return app.getVersion();
+  },
+  encryptSecret(value: string): string {
+    return encryptSecretValue(value);
+  },
+  decryptSecret(value: string): string {
+    return decryptSecretValue(value);
   },
   setTransferConcurrency(value: number): void {
     ipcRenderer.send('set-transfer-concurrency', value);

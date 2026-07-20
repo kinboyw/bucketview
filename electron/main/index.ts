@@ -467,11 +467,27 @@ async function createWindow() {
     }
   });
 
+  let startupUpdateScheduled = false;
+  const scheduleStartupUpdateCheck = () => {
+    if (startupUpdateScheduled || !win || win.isDestroyed()) return;
+    startupUpdateScheduled = true;
+    // Defer update check until UI is interactive to reduce startup jank.
+    setTimeout(() => {
+      if (!win || win.isDestroyed()) return;
+      void handlerUpdater.check(win.webContents).catch((error) => {
+        logger.warn('updater', 'startup check failed', error);
+      });
+    }, 5000);
+  };
+
   const showMainWindowAndCheckUpdate = async () => {
+    if (!win || win.isDestroyed()) return;
     win.show();
-    loadingWin.hide();
-    loadingWin.close();
-    await handlerUpdater.check(win.webContents);
+    if (!loadingWin.isDestroyed()) {
+      loadingWin.hide();
+      loadingWin.close();
+    }
+    scheduleStartupUpdateCheck();
   };
 
   ipcMain.once('removeLoading', async () => {
