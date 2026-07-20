@@ -1,5 +1,6 @@
 import { BrowserWindow, Notification, WebContents, app } from 'electron';
 import { Platform, sleep } from '../common';
+import { logger } from '../common/logger';
 import axios from 'axios';
 import YAML from 'yaml';
 import semver from 'semver';
@@ -232,36 +233,69 @@ class HandlerUpdater {
         autoUpdaterBin = tempUpdaterBin;
       }
 
+      // Preflight: package exists and install directory is writable.
+      if (!nodeFs.existsSync(this.updateInfo.downloadPath)) {
+        throw new Error(`更新包不存在: ${this.updateInfo.downloadPath}`);
+      }
+      try {
+        nodeFs.accessSync(installPath, nodeFs.constants.W_OK);
+      } catch {
+        throw new Error(`安装目录不可写: ${installPath}。请将 BucketView 放到可写目录，或以管理员身份运行。`);
+      }
+
       contents.send('handler-updater', {
         cmd: 'installing',
         version: this.updateInfo.version,
       });
-      await sleep(300);
-
-      if (!nodeFs.existsSync(this.updateInfo.downloadPath)) {
-        throw new Error(`更新包不存在: ${this.updateInfo.downloadPath}`);
-      }
+      await sleep(200);
 
       const args = [this.updateInfo.downloadPath, installPath, currentExe];
-      console.log('[updater] launching autoUpdater', { autoUpdaterBin, args });
+      logger.info('updater', 'launching autoUpdater', { autoUpdaterBin, args });
 
       const child = nodeProcess.spawn(autoUpdaterBin, args, {
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
       });
-      child.once('error', (spawnError) => {
-        console.error('[updater] autoUpdater spawn failed:', spawnError);
+
+      // Wait briefly for immediate spawn failures (missing binary / AV block).
+      const spawnOk = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        const finish = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
+          resolve(ok);
+        };
+        child.once('error', (spawnError) => {
+          logger.error('updater', 'autoUpdater spawn failed', {
+            message: spawnError instanceof Error ? spawnError.message : String(spawnError),
+          });
+          finish(false);
+        });
+        // If process exits too quickly with non-zero, treat as failure.
+        child.once('exit', (code) => {
+          if (code && code !== 0) {
+            logger.error('updater', 'autoUpdater exited early', { code });
+            finish(false);
+          }
+        });
+        setTimeout(() => finish(true), 500);
       });
-      // Detach immediately so installer can replace files after we exit.
+
+      if (!spawnOk) {
+        throw new Error('自动更新助手启动失败，请检查杀软拦截或重新下载安装包');
+      }
+
+      // Detach so installer can replace files after we exit.
       child.unref();
-      // Give the helper a brief moment to start before the host process exits.
-      await sleep(400);
+      await sleep(200);
       return true;
     } catch (error) {
+      const message = getErrorMessage(error);
+      logger.error('updater', 'installDownloaded failed', { message });
       contents.send('handler-updater', {
         cmd: 'error',
-        message: getErrorMessage(error),
+        message,
       });
       return false;
     }

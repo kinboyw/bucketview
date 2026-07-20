@@ -636,8 +636,14 @@
             </a-button>
           </a-tooltip>
         </div>
-        <div class="transfer-list">
-          <div v-for="[uid, value] in transferListEntries" :key="uid" class="transfer-item">
+        <div
+          ref="transferListRef"
+          class="transfer-list"
+          @scroll.passive="handleTransferListScroll"
+        >
+          <div class="transfer-list-phantom" :style="{ height: transferVirtualTotalHeight + 'px' }">
+            <div class="transfer-list-window" :style="{ transform: `translateY(${transferVirtualOffset}px)` }">
+          <div v-for="{ uid, value } in visibleTransferEntries" :key="uid" class="transfer-item">
             <div class="transfer-row">
               <div class="transfer-info">
                 <span class="transfer-arrow">
@@ -691,6 +697,8 @@
                   </a-tooltip>
                 </span>
               </div>
+            </div>
+          </div>
             </div>
           </div>
         </div>
@@ -879,6 +887,7 @@ import {
 import StringUtil from '../common/stringUtil';
 import { v4 as uuidv4 } from 'uuid';
 import { defaultStorage, useConfigStore } from '../store/config';
+import { sortObjectInfos } from '../common/object-list';
 import { useSettingStore } from '../store/setting';
 import { useTransferStore, TransferInfo } from '../store/transfer';
 import { useAuditStore } from '../store/audit';
@@ -1673,13 +1682,6 @@ export default defineComponent({
     };
 
     const getFileIcon = (filename: string) => getFileIconInfo(filename).icon;
-
-    const sortObjectInfos = (objectInfos: ObjectInfo[]) => {
-      return objectInfos.sort((a, b) => {
-        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
-        return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
-      });
-    };
 
     const COMPACT_DIRECTORY_MAX_DEPTH = 16;
     const COMPACT_DIRECTORY_MAX_ITEMS = 80;
@@ -3076,6 +3078,63 @@ export default defineComponent({
         return tb - ta;
       })
     );
+
+    // Lightweight windowing for large transfer history (no extra deps).
+    const TRANSFER_ROW_HEIGHT = 49;
+    const TRANSFER_OVERSCAN = 8;
+    const transferListRef = ref<HTMLElement | null>(null);
+    const transferScrollTop = ref(0);
+    const transferViewportHeight = ref(480);
+    const transferVirtualTotalHeight = computed(() => transferListEntries.value.length * TRANSFER_ROW_HEIGHT);
+    const transferVirtualStart = computed(() => {
+      const start = Math.floor(transferScrollTop.value / TRANSFER_ROW_HEIGHT) - TRANSFER_OVERSCAN;
+      return Math.max(0, start);
+    });
+    const transferVirtualOffset = computed(() => transferVirtualStart.value * TRANSFER_ROW_HEIGHT);
+    const visibleTransferEntries = computed(() => {
+      const all = transferListEntries.value;
+      const start = transferVirtualStart.value;
+      const visibleCount = Math.ceil(transferViewportHeight.value / TRANSFER_ROW_HEIGHT) + TRANSFER_OVERSCAN * 2;
+      const end = Math.min(all.length, start + visibleCount);
+      const rows: { uid: string; value: TransferInfo }[] = [];
+      for (let idx = start; idx < end; idx++) {
+        const entry = all[idx];
+        if (!entry) continue;
+        rows.push({ uid: entry[0], value: entry[1] });
+      }
+      return rows;
+    });
+    const handleTransferListScroll = (e: Event) => {
+      const el = e.target as HTMLElement | null;
+      if (!el) return;
+      transferScrollTop.value = el.scrollTop;
+      transferViewportHeight.value = el.clientHeight || transferViewportHeight.value;
+    };
+    const measureTransferListViewport = () => {
+      const el = transferListRef.value;
+      if (!el) return;
+      transferViewportHeight.value = el.clientHeight || 480;
+    };
+    const clampTransferListScroll = () => {
+      const el = transferListRef.value;
+      if (!el) return;
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (el.scrollTop > maxScroll) el.scrollTop = maxScroll;
+      transferScrollTop.value = el.scrollTop;
+      transferViewportHeight.value = el.clientHeight || transferViewportHeight.value;
+    };
+    watch(() => transferDrawerState.visible, (open) => {
+      if (!open) return;
+      nextTick(() => {
+        measureTransferListViewport();
+        transferScrollTop.value = transferListRef.value?.scrollTop || 0;
+      });
+    });
+    // Keep window index valid after clear / prune of transfer history.
+    watch(() => transferListEntries.value.length, () => {
+      nextTick(clampTransferListScroll);
+    });
+
     const handleClearTransferHistory = () => {
       transferStore.clearHistory();
     };
@@ -4486,6 +4545,11 @@ export default defineComponent({
       formatTransferSize,
       formatTransferTime,
       transferListEntries,
+      transferListRef,
+      visibleTransferEntries,
+      transferVirtualTotalHeight,
+      transferVirtualOffset,
+      handleTransferListScroll,
       handleClearTransferHistory,
       handleRecoverInterrupted,
       configDrawerVisible,
@@ -5848,8 +5912,27 @@ export default defineComponent({
     }
 
     .transfer-list {
+      max-height: calc(100vh - 180px);
+      overflow-y: auto;
+      position: relative;
+
+      .transfer-list-phantom {
+        position: relative;
+        width: 100%;
+      }
+
+      .transfer-list-window {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        will-change: transform;
+      }
+
       .transfer-item {
         width: 100%;
+        height: 49px;
+        box-sizing: border-box;
         padding: 6px 0;
         border-bottom: 1px solid #f5f5f5;
       }

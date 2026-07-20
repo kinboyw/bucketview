@@ -12,6 +12,15 @@ const store = new Store();
 
 const configDir = nodePath.join(nodePath.dirname(store.path), "bucketview");
 
+/** Remove rclone conf that contains plaintext secrets after process has started. */
+const scrubMountConfigSecrets = (mountConfigFile: string) => {
+  try {
+    if (nodeFs.existsSync(mountConfigFile)) {
+      nodeFs.unlinkSync(mountConfigFile);
+    }
+  } catch {}
+};
+
 // 根据 target id 生成 rc 端口号 (5570-5599)
 function getRcPort(targetId: string): number {
   let hash = 0;
@@ -325,10 +334,12 @@ export class Fuse {
       try { nodeFs.unlinkSync(mountConfigLogFile); } catch {}
 
       if (fuseBin.length == 0) {
+        scrubMountConfigSecrets(mountConfigFile);
         return { success: false, desc: "请前往设置选择挂载程序" }
       }
 
       if (!mountTarget.mountPoint || mountTarget.mountPoint.trim().length === 0) {
+        scrubMountConfigSecrets(mountConfigFile);
         return { success: false, desc: "请指定挂载盘符/路径" }
       }
 
@@ -337,8 +348,10 @@ export class Fuse {
       if (Platform.windows() && drives.includes(mountTarget.mountPoint)) {
         try { nodeFs.accessSync(mountTarget.mountPoint); }
         catch {
+          scrubMountConfigSecrets(mountConfigFile);
           return { success: false, desc: `盘符 ${mountTarget.mountPoint} 存在幽灵盘符残留，请先重启或手动清理` };
         }
+        scrubMountConfigSecrets(mountConfigFile);
         return { success: false, desc: `盘符 ${mountTarget.mountPoint} 已被占用` };
       }
 
@@ -373,6 +386,8 @@ export class Fuse {
         subprocess.once("spawn", () => {
           if (subprocess.pid) {
             nodeFs.writeFileSync(mountConfigPidFile, subprocess.pid.toString());
+            // rclone has read conf into memory; drop plaintext secret file ASAP.
+            setTimeout(() => scrubMountConfigSecrets(mountConfigFile), 1500);
           }
           nodeFs.writeFileSync(mountConfigRcFile, rcPort.toString());
           resolve({ success: true });
@@ -398,6 +413,7 @@ export class Fuse {
         await cleanupGhostDrive(mountTarget.mountPoint || '');
         try { nodeFs.unlinkSync(mountConfigLogFile); } catch {}
         try { nodeFs.unlinkSync(mountConfigRcFile); } catch {}
+        scrubMountConfigSecrets(mountConfigFile);
         const desc = logDetail || "挂载异常：盘符不可访问";
         return { success: false, desc };
       }
@@ -408,6 +424,7 @@ export class Fuse {
       // 异常后清理残留
       killStaleProcess(mountTarget.id);
       await cleanupGhostDrive(mountTarget.mountPoint || '');
+      scrubMountConfigSecrets(mountConfigFile);
       return { success: false, desc: error.message };
     }
   }
@@ -429,6 +446,7 @@ export class Fuse {
       if (!mountState) {
         try { nodeFs.unlinkSync(mountConfigPidFile); } catch {}
         try { nodeFs.unlinkSync(mountConfigRcFile); } catch {}
+        scrubMountConfigSecrets(nodePath.join(configDir, mountTarget.id));
         return { success: true };
       }
 
@@ -438,6 +456,7 @@ export class Fuse {
 
       // 清理文件
       try { nodeFs.unlinkSync(mountConfigRcFile); } catch {}
+      scrubMountConfigSecrets(nodePath.join(configDir, mountTarget.id));
 
       // 最终检查
       const finalState = await Fuse.checkMount(mountTarget.mountPoint);

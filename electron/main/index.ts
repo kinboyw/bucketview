@@ -463,7 +463,7 @@ async function createWindow() {
         try { app.exit(0); } catch { process.exit(0); }
       }, 200);
     } catch (error) {
-      console.error('[updater] install handler failed:', error);
+      logger.error('updater', 'install handler failed', error);
     }
   });
 
