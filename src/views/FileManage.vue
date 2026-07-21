@@ -722,6 +722,20 @@ interface NavPopupCacheEntry {
 }
 const navPopupCache = new Map<string, NavPopupCacheEntry>();
 const NAV_POPUP_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const NAV_POPUP_CACHE_MAX = 80;
+const setNavPopupCache = (key: string, entry: NavPopupCacheEntry) => {
+  if (navPopupCache.has(key)) navPopupCache.delete(key);
+  navPopupCache.set(key, entry);
+  const now = Date.now();
+  for (const [k, v] of navPopupCache) {
+    if (now - v.timestamp > NAV_POPUP_CACHE_TTL) navPopupCache.delete(k);
+  }
+  while (navPopupCache.size > NAV_POPUP_CACHE_MAX) {
+    const oldest = navPopupCache.keys().next().value;
+    if (oldest === undefined) break;
+    navPopupCache.delete(oldest);
+  }
+};
 
 type Key = string | number;
 
@@ -1109,6 +1123,7 @@ export default defineComponent({
 
     /** 同步存储上下文：只在 connection 凭据改变时重建 S3Client，否则只更新 bucket/prefix */
     const lastAppliedConnKey = ref('');
+    const lastAppliedTargetKey = ref('');
     const lastClickAnchor = ref<string | null>(null);
     const applyStorageContext = () => {
       const conn = activeConnection.value;
@@ -1119,12 +1134,17 @@ export default defineComponent({
         try {
           storage.changeConfig(defaultStorage, _.cloneDeep(toRaw(conn)));
           lastAppliedConnKey.value = connKey;
+          // Force setTarget after client rebuild even if bucket/prefix unchanged.
+          lastAppliedTargetKey.value = '';
         } catch (e) {
           console.error('[STORAGE] applyStorageContext changeConfig failed:', e);
         }
       }
+      const targetKey = `${activeBucket.value || ''}|${activePathPrefix.value || ''}`;
+      if (targetKey === lastAppliedTargetKey.value) return;
       try {
         storage.setTarget(defaultStorage, activeBucket.value, activePathPrefix.value);
+        lastAppliedTargetKey.value = targetKey;
       } catch (e) {
         console.error('[STORAGE] applyStorageContext setTarget failed:', e);
       }
@@ -1543,6 +1563,9 @@ export default defineComponent({
     // Debounced list filter (declared early for unmount cleanup).
     const listFilterKeyword = ref("");
     let searchFilterTimer: ReturnType<typeof setTimeout> | null = null;
+    // Coalesced transfer progress (declared early for unmount cleanup).
+    const pendingTransferProgress = new Map<string, any>();
+    let transferProgressRaf = 0;
     const bucketDirectoryMap: Record<string, string> = {};
     const bucketStateMap: Record<string, {
       tableSource: ObjectInfo[];
@@ -1768,7 +1791,10 @@ export default defineComponent({
       });
 
       refreshMountStatus();
-      mountCheckTimer = setInterval(refreshMountStatus, 10000);
+      mountCheckTimer = setInterval(() => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        refreshMountStatus();
+      }, 10000);
     });
 
     const handleGlobalKeydown = (e: KeyboardEvent) => {
@@ -1791,6 +1817,15 @@ export default defineComponent({
       if (searchFilterTimer) {
         clearTimeout(searchFilterTimer);
         searchFilterTimer = null;
+      }
+      if (transferProgressRaf) {
+        cancelAnimationFrame(transferProgressRaf);
+        transferProgressRaf = 0;
+      }
+      pendingTransferProgress.clear();
+      if (tabSilentRefreshTimer) {
+        clearTimeout(tabSilentRefreshTimer);
+        tabSilentRefreshTimer = null;
       }
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('click', handleClickOutside);
@@ -2564,10 +2599,7 @@ export default defineComponent({
       closeNavPopupsAfter(level);
       navPopupLoadingVisible.splice(level);
       if (navLoadingTimer) { clearTimeout(navLoadingTimer); navLoadingTimer = null; }
-      const _currentConn = configStore.getConnectionById(activeConnectionId.value);
-      if (_currentConn) {
-        applyStorageContext();
-      }
+      // 存储上下文由 watcher 维护；hover popup 不再强制 apply，减少 setTarget 抖动。
       // 虚拟桶模式：临时切换到 overrideBucket 进行 list，完成后恢复
       if (overrideBucket) {
         storage.setTarget(defaultStorage, overrideBucket, '');
@@ -2680,7 +2712,7 @@ export default defineComponent({
             dirs.push({ name: info.name, objectName: info.objectName, hasSubDirs: true });
           }
         });
-        navPopupCache.set(cacheKey, { dirs, timestamp: Date.now() });
+        setNavPopupCache(cacheKey, { dirs, timestamp: Date.now() });
         processNavPopupDirs(dirs, level, cleanPrefix);
       }).catch(() => {
         restoreTarget();
@@ -3417,15 +3449,9 @@ export default defineComponent({
           storage.deleteObject(defaultStorage, objectNames).then((resp) => {
             handleFileTableRowSelection([], []);
             if (resp.success) {
-              const prefix = tableState.currentDirectory;
-              if (prefix == tableState.currentDirectory) {
-                objectNames.forEach((objectName) => {
-                  {
-                    const next = tableSource.value.filter((objInfo) => objInfo.objectName != objectName);
-                    setTableSource(next);
-                  }
-                });
-              }
+              const deleted = new Set(objectNames);
+              const next = tableSource.value.filter((objInfo) => !deleted.has(objInfo.objectName));
+              if (next.length !== tableSource.value.length) setTableSource(next);
               // 精准 VFS 刷新：失效被删文件缓存 + 验证删除结果
               scheduleVfsRefresh(tableState.currentDirectory, { forgetFiles: objectNames, expectDeleted: objectNames });
               notification['success']({
@@ -3463,8 +3489,6 @@ export default defineComponent({
     };
 
     // Coalesce high-frequency transfer progress events to one UI write per frame.
-    const pendingTransferProgress = new Map<string, any>();
-    let transferProgressRaf = 0;
     const flushTransferProgressPatches = () => {
       transferProgressRaf = 0;
       pendingTransferProgress.forEach((patch, uid) => {

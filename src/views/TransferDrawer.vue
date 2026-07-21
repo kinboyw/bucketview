@@ -110,7 +110,7 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, nextTick, ref, toRaw, watch, type PropType } from 'vue';
+import { computed, defineComponent, nextTick, onUnmounted, ref, toRaw, watch, type PropType } from 'vue';
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -162,11 +162,31 @@ export default defineComponent({
     const settingStore = useSettingStore();
     const transferStore = useTransferStore();
     const transferFabHover = ref(false);
+    const EMPTY_TRANSFER_ENTRIES: [string, TransferInfo][] = [];
+    const EMPTY_VISIBLE_TRANSFER_ENTRIES: { uid: string; value: TransferInfo }[] = [];
 
-    const transferLength = computed(
-      () => Object.values(transferStore.queue).filter((item) => item.status == 'running' || item.status == 'waiting').length,
-    );
-    const transferTotalLength = computed(() => Object.values(transferStore.queue).length);
+    const countActiveTransfers = () => {
+      const queue = transferStore.queue;
+      let count = 0;
+      for (const uid in queue) {
+        const item = queue[uid];
+        if (!item) continue;
+        if (item.status === 'running' || item.status === 'waiting') count += 1;
+      }
+      return count;
+    };
+    const countAllTransfers = () => {
+      const queue = transferStore.queue;
+      let count = 0;
+      for (const uid in queue) {
+        if (queue[uid]) count += 1;
+      }
+      return count;
+    };
+
+    // FAB badge still needs active count while drawer is closed.
+    const transferLength = computed(() => countActiveTransfers());
+    const transferTotalLength = computed(() => (props.open ? countAllTransfers() : 0));
 
     const parseSpeed = (speed = '') => {
       const match = speed.match(/^([\d.]+)\s*(B|KB|MB)\/s$/i);
@@ -184,28 +204,41 @@ export default defineComponent({
       return `${(bytes / 1024 / 1024).toFixed(2)} MB/s`;
     };
     const sumTransferSpeed = (type: 'upload' | 'download') => {
-      return Object.values(transferStore.queue)
-        .filter((item) => item.type === type && item.status === 'running')
-        .reduce((sum, item) => sum + parseSpeed(item.speed), 0);
+      const queue = transferStore.queue;
+      let sum = 0;
+      for (const uid in queue) {
+        const item = queue[uid];
+        if (!item || item.type !== type || item.status !== 'running') continue;
+        sum += parseSpeed(item.speed);
+      }
+      return sum;
     };
-    const transferUploadSpeed = computed(() => formatSpeed(sumTransferSpeed('upload')));
-    const transferDownloadSpeed = computed(() => formatSpeed(sumTransferSpeed('download')));
-    const transferListEntries = computed(() =>
-      sortTransferEntries(Object.entries(transferStore.queue) as [string, TransferInfo][]),
-    );
+    // Speed badges are only visible inside the open drawer.
+    const transferUploadSpeed = computed(() => (props.open ? formatSpeed(sumTransferSpeed('upload')) : '0 B/s'));
+    const transferDownloadSpeed = computed(() => (props.open ? formatSpeed(sumTransferSpeed('download')) : '0 B/s'));
+    // Avoid full queue sort/windowing work while the drawer is closed.
+    const transferListEntries = computed(() => {
+      if (!props.open) return EMPTY_TRANSFER_ENTRIES;
+      return sortTransferEntries(Object.entries(transferStore.queue) as [string, TransferInfo][]);
+    });
 
     const TRANSFER_ROW_HEIGHT = 49;
     const TRANSFER_OVERSCAN = 8;
     const transferListRef = ref<HTMLElement | null>(null);
     const transferScrollTop = ref(0);
     const transferViewportHeight = ref(480);
+    let transferScrollRaf = 0;
+    let pendingTransferScrollTop = 0;
+    let pendingTransferViewportHeight = 0;
     const transferVirtualTotalHeight = computed(() => transferListEntries.value.length * TRANSFER_ROW_HEIGHT);
     const transferVirtualStart = computed(() => {
+      if (!props.open) return 0;
       const start = Math.floor(transferScrollTop.value / TRANSFER_ROW_HEIGHT) - TRANSFER_OVERSCAN;
       return Math.max(0, start);
     });
     const transferVirtualOffset = computed(() => transferVirtualStart.value * TRANSFER_ROW_HEIGHT);
     const visibleTransferEntries = computed(() => {
+      if (!props.open) return EMPTY_VISIBLE_TRANSFER_ENTRIES;
       const all = transferListEntries.value;
       const start = transferVirtualStart.value;
       const visibleCount = Math.ceil(transferViewportHeight.value / TRANSFER_ROW_HEIGHT) + TRANSFER_OVERSCAN * 2;
@@ -221,8 +254,16 @@ export default defineComponent({
     const handleTransferListScroll = (e: Event) => {
       const el = e.target as HTMLElement | null;
       if (!el) return;
-      transferScrollTop.value = el.scrollTop;
-      transferViewportHeight.value = el.clientHeight || transferViewportHeight.value;
+      pendingTransferScrollTop = el.scrollTop;
+      pendingTransferViewportHeight = el.clientHeight || pendingTransferViewportHeight;
+      if (transferScrollRaf) return;
+      transferScrollRaf = requestAnimationFrame(() => {
+        transferScrollRaf = 0;
+        transferScrollTop.value = pendingTransferScrollTop;
+        if (pendingTransferViewportHeight) {
+          transferViewportHeight.value = pendingTransferViewportHeight;
+        }
+      });
     };
     const measureTransferListViewport = () => {
       const el = transferListRef.value;
@@ -245,7 +286,14 @@ export default defineComponent({
       });
     });
     watch(() => transferListEntries.value.length, () => {
+      if (!props.open) return;
       nextTick(clampTransferListScroll);
+    });
+    onUnmounted(() => {
+      if (transferScrollRaf) {
+        cancelAnimationFrame(transferScrollRaf);
+        transferScrollRaf = 0;
+      }
     });
 
     const closeDrawer = () => emit('update:open', false);
@@ -362,9 +410,17 @@ export default defineComponent({
       }
     };
 
-    const failedTransferCount = computed(() =>
-      Object.values(transferStore.queue).filter((item) => item.status === 'error' || item.status === 'cancel').length,
-    );
+    const failedTransferCount = computed(() => {
+      if (!props.open) return 0;
+      const queue = transferStore.queue;
+      let count = 0;
+      for (const uid in queue) {
+        const item = queue[uid];
+        if (!item) continue;
+        if (item.status === 'error' || item.status === 'cancel') count += 1;
+      }
+      return count;
+    });
 
     const handleRetryAllFailedTransfers = () => {
       const failed = Object.entries(transferStore.queue)
