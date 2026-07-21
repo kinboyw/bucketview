@@ -1183,18 +1183,34 @@ export default defineComponent({
     // Debounced silent refresh after tab restore — cancel if user keeps switching.
     let tabSilentRefreshTimer: ReturnType<typeof setTimeout> | null = null;
     let tabSilentRefreshToken = 0;
-    const scheduleTabSilentRefresh = (connectionId: string, directory: string) => {
+    const TAB_SILENT_REFRESH_DELAY_MS = 700;
+    const TAB_SILENT_REFRESH_MIN_AGE_MS = 3000;
+    const scheduleTabSilentRefresh = (
+      connectionId: string,
+      directory: string,
+      opts?: { bucket?: string; pathPrefix?: string },
+    ) => {
       if (tabSilentRefreshTimer) {
         clearTimeout(tabSilentRefreshTimer);
         tabSilentRefreshTimer = null;
       }
       const token = ++tabSilentRefreshToken;
+      const expectedBucket = opts?.bucket ?? (activeBucket.value || '');
+      const expectedPathPrefix = opts?.pathPrefix ?? (activePathPrefix.value || '');
+      const expectedDirectory = StringUtil.trim(directory || '', '/');
       tabSilentRefreshTimer = setTimeout(() => {
         tabSilentRefreshTimer = null;
         if (token !== tabSilentRefreshToken) return;
+        // Drop work when the window is hidden; next visible restore can refresh later.
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
         if (activeConnectionId.value !== connectionId) return;
-        handleStorageListObjects(directory, false, true);
-      }, 600);
+        if ((activeBucket.value || '') !== expectedBucket) return;
+        if ((activePathPrefix.value || '') !== expectedPathPrefix) return;
+        if (StringUtil.trim(tableState.currentDirectory || '', '/') !== expectedDirectory) return;
+        // Avoid stacking a silent refresh on top of an explicit load.
+        if (tableState.loading || listLoadingMore.value) return;
+        handleStorageListObjects(expectedDirectory ? expectedDirectory : '/', false, true);
+      }, TAB_SILENT_REFRESH_DELAY_MS);
     };
 
     watch(activeConnectionId, (connectionId, oldConnectionId) => {
@@ -1245,8 +1261,11 @@ export default defineComponent({
         tableState.loading = false;
         listLoadingMore.value = false;
         const age = Date.now() - (cached.cachedAt || 0);
-        if (age > 3000) {
-          scheduleTabSilentRefresh(connectionId, cached.currentDirectory || '');
+        if (age > TAB_SILENT_REFRESH_MIN_AGE_MS) {
+          scheduleTabSilentRefresh(connectionId, cached.currentDirectory || '', {
+            bucket: activeBucket.value || '',
+            pathPrefix: activePathPrefix.value || '',
+          });
         }
       } else {
         const dir = bucketDirectoryMap[connectionId] || '/';
@@ -3253,15 +3272,21 @@ export default defineComponent({
       // 不再每次 listObjects 都调用 changeConfig/setTarget，
       // 存储上下文由 applyStorageContext 统一管理
       const requestId = ++listRequestId;
-      // Capture owner context so stale progressive pages cannot paint into another tab.
+      // Capture owner context so stale progressive pages cannot paint into another tab/dir.
       const ownerConnectionId = activeConnectionId.value;
       const ownerBucket = activeBucket.value || '';
       const ownerPathPrefix = activePathPrefix.value || '';
+      // Resolve target directory before mutating UI state.
+      const requestedDirectory = (typeof searchDirectory === 'string' && searchDirectory.length > 0)
+        ? searchDirectory
+        : (tableState.searchDirectory || tableState.currentDirectory || '/');
+      const ownerDirectory = StringUtil.trim(requestedDirectory, '/');
       const isCurrentListOwner = () =>
         requestId === listRequestId
         && activeConnectionId.value === ownerConnectionId
         && (activeBucket.value || '') === ownerBucket
-        && (activePathPrefix.value || '') === ownerPathPrefix;
+        && (activePathPrefix.value || '') === ownerPathPrefix
+        && StringUtil.trim(tableState.currentDirectory || '', '/') === ownerDirectory;
       try { listAbortController?.abort(); } catch {}
       listAbortController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
       const abortSignal = listAbortController?.signal;
@@ -3270,22 +3295,24 @@ export default defineComponent({
         lastClickAnchor.value = null;
         tableState.searchKeyword = '';
         tableState.loading = true;
-      } else {
-        tableState.refreshing = true;
-      }
-      if (typeof searchDirectory === 'string' && searchDirectory.length > 0) {
-        tableState.searchDirectory = searchDirectory;
-      }
-
-      tableState.currentDirectory = StringUtil.trim(tableState.searchDirectory, '/');
-      if (trackNav) pushNav(tableState.currentDirectory);
-      const bcRaw = StringUtil.trim(tableState.currentDirectory, '/').split('/');
-      tableState.breadcrumbDirectory = bcRaw.filter(s => s.length > 0);
-      if (!silent) {
+        tableState.refreshing = false;
+        tableState.searchDirectory = requestedDirectory;
+        tableState.currentDirectory = ownerDirectory;
+        if (trackNav) pushNav(tableState.currentDirectory);
+        const bcRaw = ownerDirectory.split('/');
+        tableState.breadcrumbDirectory = bcRaw.filter(s => s.length > 0);
         setTableSource([]);
         tableState.nextContinuationToken = '';
         listLoadedPages.value = 0;
         listLoadingMore.value = false;
+      } else {
+        // Silent refresh must not thrash navigation chrome. Keep showing the restored cache
+        // until a complete final result for the same owner arrives.
+        if (StringUtil.trim(tableState.currentDirectory || '', '/') !== ownerDirectory) {
+          // Directory moved since schedule — abandon this silent run.
+          return;
+        }
+        tableState.refreshing = true;
       }
 
       // Progressive list loading:
@@ -3328,22 +3355,38 @@ export default defineComponent({
           }
           sortObjectInfos(deduped);
           rows = await compactDirectoryChains(deduped, { enabled: true });
-          if (!isCurrentListOwner()) return;
+          if (!isCurrentListOwner()) {
+            if (silent && requestId !== listRequestId) tableState.refreshing = false;
+            return;
+          }
           sortObjectInfos(rows);
         } else {
           rows = source.slice();
           sortObjectInfos(rows);
-          if (!isCurrentListOwner()) return;
+          if (!isCurrentListOwner()) {
+            if (silent && requestId !== listRequestId) tableState.refreshing = false;
+            return;
+          }
+        }
+        // Silent refresh must never replace a good cache with a failed empty snapshot.
+        // Successful empty lists still apply so deleted-all dirs refresh correctly.
+        if (silent && opts?.error) {
+          tableState.refreshing = false;
+          return;
         }
         setTableSource(rows);
         tableState.nextContinuationToken = token;
         listLoadedPages.value = pages;
         if (!silent) tableState.loading = false;
         // Keep a light "loading more" indicator while background pages continue.
-        listLoadingMore.value = !opts?.final && !!token;
+        // Silent refresh only paints the final result, so never flip loading-more chrome.
+        if (!silent) {
+          listLoadingMore.value = !opts?.final && !!token;
+        }
         if (opts?.final || !token) {
           tableState.refreshing = false;
-          listLoadingMore.value = false;
+          if (!silent) listLoadingMore.value = false;
+          else listLoadingMore.value = false;
         }
         persistBucketState(token);
       };
@@ -3396,7 +3439,7 @@ export default defineComponent({
             if (shouldPaint) {
               firstPaintDone = true;
               await applyListResult(buffer, nextToken, { final: !nextToken });
-            } else {
+            } else if (!silent) {
               tableState.nextContinuationToken = nextToken;
               listLoadedPages.value = pages;
               listLoadingMore.value = !!nextToken;
