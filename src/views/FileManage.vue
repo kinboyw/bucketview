@@ -262,8 +262,8 @@
                     :pagination="false"
                     :locale="tableLocale"
                     :scroll="{ y: tableScrollHeight }"
-                    :row-selection="{ selectedRowKeys: tableState.selectedRowKeys, onChange: handleFileTableRowSelection, onSelect: handleFileTableRowSelect }"
-                    :customRow="(record: ObjectInfo) => customTableRow(record)"
+                    :row-selection="tableRowSelection"
+                    :customRow="customTableRow"
                   >
                     <template #bodyCell="{ column, record }">
                       <template v-if="column.dataIndex === 'name'">
@@ -1480,22 +1480,26 @@ export default defineComponent({
       }
     };
 
-    const currentDirectoryTotalSize = computed(() => {
-      return filteredSource.value.reduce((sum, item) => sum + (item.size || 0), 0);
+    // Single-pass stats for status bar (avoid 3 full scans per render).
+    const listStats = computed(() => {
+      let directoryCount = 0;
+      let fileCount = 0;
+      let totalSize = 0;
+      const rows = filteredSource.value;
+      for (let i = 0; i < rows.length; i++) {
+        const item = rows[i];
+        if (item.type === 'directory') directoryCount += 1;
+        else {
+          fileCount += 1;
+          totalSize += item.size || 0;
+        }
+      }
+      return { directoryCount, fileCount, totalSize };
     });
-
-    const directoryCount = computed(() => {
-      return filteredSource.value.filter(item => item.type === 'directory').length;
-    });
-
-    const fileCount = computed(() => {
-      return filteredSource.value.filter(item => item.type !== 'directory').length;
-    });
-
-
-    const formatDirectorySize = computed(() => {
-      return StringUtil.formatFileSize(currentDirectoryTotalSize.value);
-    });
+    const currentDirectoryTotalSize = computed(() => listStats.value.totalSize);
+    const directoryCount = computed(() => listStats.value.directoryCount);
+    const fileCount = computed(() => listStats.value.fileCount);
+    const formatDirectorySize = computed(() => StringUtil.formatFileSize(currentDirectoryTotalSize.value));
 
     const resolveLocalPath = (objectName: string) => {
       if (!currentBucketMountPoint.value) return '';
@@ -1608,7 +1612,16 @@ export default defineComponent({
       return { icon: FileOutlined, color: '#8c8c8c' };
     };
 
-    const getFileIcon = (filename: string) => getFileIconInfo(filename).icon;
+    const fileIconCache = new Map<string, any>();
+    const getFileIcon = (filename: string) => {
+      const ext = (filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : '').toLowerCase();
+      const key = ext || filename;
+      const cached = fileIconCache.get(key);
+      if (cached) return cached;
+      const icon = getFileIconInfo(filename).icon;
+      fileIconCache.set(key, icon);
+      return icon;
+    };
 
     const COMPACT_DIRECTORY_MAX_DEPTH = 8;
     const COMPACT_DIRECTORY_MAX_ITEMS = 40;
@@ -2512,6 +2525,13 @@ export default defineComponent({
       else if (e.button === 4) goForward();
     };
 
+    // Stable rowSelection identity — avoids ant-table rebinding selection each render.
+    const tableRowSelection = computed(() => ({
+      selectedRowKeys: tableState.selectedRowKeys,
+      onChange: handleFileTableRowSelection,
+      onSelect: handleFileTableRowSelect,
+    }));
+
     // 行点击交互：利用原生click/dblclick事件
     const customTableRow = (record: ObjectInfo) => {
       return {
@@ -2945,7 +2965,8 @@ export default defineComponent({
     const tableLocale = computed(() => tableState.loading ? { emptyText: ' ' } : undefined);
 
     const listLoadMode = computed(() => settingStore.listLoadMode || 'waterfall');
-    const waterfallLimit = ref(100);
+    const WATERFALL_PAGE = 80;
+    const waterfallLimit = ref(WATERFALL_PAGE);
 
     const paginatedSource = computed(() => {
       if (listLoadMode.value === 'waterfall') {
@@ -2958,7 +2979,7 @@ export default defineComponent({
 
     watch(() => tableState.searchKeyword, () => {
       paginationState.current = 1;
-      waterfallLimit.value = 100;
+      waterfallLimit.value = WATERFALL_PAGE;
     });
 
     watch(() => filteredSource.value, (next, prev) => {
@@ -2967,22 +2988,27 @@ export default defineComponent({
       const prevLen = Array.isArray(prev) ? prev.length : 0;
       const nextLen = Array.isArray(next) ? next.length : 0;
       if (nextLen === 0 || nextLen < prevLen) {
-        waterfallLimit.value = 100;
+        waterfallLimit.value = WATERFALL_PAGE;
       }
     });
 
+    let waterfallScrollRaf = 0;
+    const handleTableBodyScroll = (e: Event) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || !target.classList || !target.classList.contains('ant-table-body')) return;
+      if (listLoadMode.value !== 'waterfall') return;
+      if (waterfallScrollRaf) return;
+      waterfallScrollRaf = requestAnimationFrame(() => {
+        waterfallScrollRaf = 0;
+        if (target.scrollTop + target.clientHeight < target.scrollHeight - 80) return;
+        if (waterfallLimit.value >= filteredSource.value.length) return;
+        waterfallLimit.value = Math.min(filteredSource.value.length, waterfallLimit.value + WATERFALL_PAGE);
+      });
+    };
+
     onMounted(() => {
       if (tableWrapperRef.value) {
-        tableWrapperRef.value.addEventListener('scroll', (e: Event) => {
-          const target = e.target as HTMLElement;
-          if (target && target.classList && target.classList.contains('ant-table-body')) {
-            if (target.scrollTop + target.clientHeight >= target.scrollHeight - 50) {
-              if (listLoadMode.value === 'waterfall' && waterfallLimit.value < filteredSource.value.length) {
-                waterfallLimit.value += 100;
-              }
-            }
-          }
-        }, true);
+        tableWrapperRef.value.addEventListener('scroll', handleTableBodyScroll, { capture: true, passive: true } as any);
       }
     });
 
@@ -3509,9 +3535,11 @@ export default defineComponent({
             appendPageObjects(resp.objectInfos || []);
 
             const nextToken = resp.nextContinuationToken || null;
-            // Paint first page immediately; then every 2 pages, and always on the final page.
-            // Avoid applying twice on the last page (previous code had a trailing final apply).
-            const shouldPaint = !firstPaintDone || !nextToken || pages % 2 === 0;
+            // Non-silent: paint first page ASAP, then every 2 pages, and final page.
+            // Silent refresh (tab restore): only paint the final result to avoid thrashing the table.
+            const shouldPaint = silent
+              ? !nextToken
+              : (!firstPaintDone || !nextToken || pages % 2 === 0);
             if (shouldPaint) {
               firstPaintDone = true;
               await applyListResult(buffer, nextToken, { final: !nextToken });
@@ -4263,6 +4291,7 @@ export default defineComponent({
       handleInvertSelection,
       hideContextMenu,
       customTableRow,
+      tableRowSelection,
       navPopupChain,
       navPopupLoadingVisible,
       handleNavPopupHover,
@@ -4294,7 +4323,6 @@ export default defineComponent({
       settingStore,
       auditStore,
       auditModalVisible,
-      transferStore,
       previewModalState,
       previewModalLayout,
       isPreviewShellVisible,
