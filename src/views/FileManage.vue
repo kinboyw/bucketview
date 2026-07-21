@@ -4095,6 +4095,8 @@ export default defineComponent({
       handleDrop,
       contextMenuState,
       handleContextMenu,
+      handleRowClick,
+      handleRowDblClick,
       handleBlankAreaContextMenu,
       handleSelectAll,
       handleInvertSelection,

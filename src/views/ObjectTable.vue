@@ -25,8 +25,8 @@
               <a
                 v-if="record.type === 'directory'"
                 class="file-name file-name-directory"
-                @mouseenter="(e: MouseEvent) => emit('nav-hover', record as ObjectInfo, e)"
-                @mouseleave="(e: MouseEvent) => emit('nav-leave', e)"
+                @mouseenter="(e: MouseEvent) => onNavHover(record as ObjectInfo, e)"
+                @mouseleave="(e: MouseEvent) => onNavLeave(e)"
               >
                 <FolderOutlined class="file-icon folder-icon" />
                 <span>{{ record.name }}</span>
@@ -55,20 +55,20 @@
                     v-if="!isVirtualBucketList"
                     style="margin-right: 8px"
                     title="上传到此目录"
-                    @click="emit('upload-to-directory', record as ObjectInfo)"
+                    @click="onUploadToDirectory(record as ObjectInfo)"
                   />
                   <DownloadOutlined
                     v-if="!isVirtualBucketList"
                     style="margin-right: 8px"
-                    @click="emit('download', record as ObjectInfo)"
+                    @click="onDownload(record as ObjectInfo)"
                   />
                 </template>
                 <template v-else>
-                  <EyeOutlined style="margin-right: 8px" @click="emit('preview', record as ObjectInfo)" />
-                  <DownloadOutlined style="margin-right: 8px" @click="emit('download', record as ObjectInfo)" />
-                  <ShareAltOutlined style="margin-right: 8px" @click="emit('sign', (record as ObjectInfo).objectName)" />
+                  <EyeOutlined style="margin-right: 8px" @click="onPreview(record as ObjectInfo)" />
+                  <DownloadOutlined style="margin-right: 8px" @click="onDownload(record as ObjectInfo)" />
+                  <ShareAltOutlined style="margin-right: 8px" @click="onSign((record as ObjectInfo).objectName)" />
                 </template>
-                <DeleteOutlined @click="emit('delete', [(record as ObjectInfo).objectName])" />
+                <DeleteOutlined @click="onDelete([(record as ObjectInfo).objectName])" />
               </span>
             </template>
           </template>
@@ -83,7 +83,7 @@
         <span class="status-item" v-if="listLoadingMore">
           <LoadingOutlined spin /> 继续加载中…
           <template v-if="listLoadedPages > 0">（第 {{ listLoadedPages }} 批）</template>
-          <a class="status-cancel-load" @click.stop="emit('cancel-load')">停止</a>
+          <a class="status-cancel-load" @click.stop="onCancelLoad">停止</a>
         </span>
         <span class="status-item" v-else-if="nextContinuationToken">还有更多对象可加载</span>
         <span class="status-item" v-if="currentDirectoryTotalSize > 0">
@@ -473,6 +473,15 @@ export default defineComponent({
       emit('page-size-change', current, size);
     };
 
+    const onNavHover = (record: ObjectInfo, e: MouseEvent) => emit('nav-hover', record, e);
+    const onNavLeave = (e: MouseEvent) => emit('nav-leave', e);
+    const onUploadToDirectory = (record: ObjectInfo) => emit('upload-to-directory', record);
+    const onDownload = (record: ObjectInfo) => emit('download', record);
+    const onPreview = (record: ObjectInfo) => emit('preview', record);
+    const onSign = (objectName: string) => emit('sign', objectName);
+    const onDelete = (objectNames: string[]) => emit('delete', objectNames);
+    const onCancelLoad = () => emit('cancel-load');
+
     return {
       tableWrapperRef,
       customPaginationRef,
@@ -491,6 +500,14 @@ export default defineComponent({
       onBlankContextMenu,
       onPageChange,
       onPageSizeChange,
+      onNavHover,
+      onNavLeave,
+      onUploadToDirectory,
+      onDownload,
+      onPreview,
+      onSign,
+      onDelete,
+      onCancelLoad,
     };
   },
 });
