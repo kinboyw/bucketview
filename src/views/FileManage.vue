@@ -1159,12 +1159,19 @@ export default defineComponent({
     const activeBucketPrefixKey = computed(() => {
       const conn = activeConnection.value;
       if (!conn) return '';
-      return `${conn.bucket || ''}|${conn.pathPrefix || ''}`;
+      // Include connection id so identical bucket names on different tabs do not collide.
+      return `${conn.id}|${conn.bucket || ''}|${conn.pathPrefix || ''}`;
     });
     let switchingTab = false;
 
-    watch(activeBucketPrefixKey, () => {
+    watch(activeBucketPrefixKey, (nextKey, prevKey) => {
       if (switchingTab) return;
+      if (!nextKey || !prevKey) return;
+      // Only react when the same connection's configured bucket/prefix changed.
+      // Tab switches change the connection id segment and must not force a root reload.
+      const nextConnId = nextKey.split('|')[0];
+      const prevConnId = prevKey.split('|')[0];
+      if (!nextConnId || nextConnId !== prevConnId) return;
       // bucket/prefix 变了，重置导航并刷新
       if (activeConnectionId.value) {
         activeBucketMap[activeConnectionId.value] = '';
@@ -1192,6 +1199,12 @@ export default defineComponent({
 
     watch(activeConnectionId, (connectionId, oldConnectionId) => {
       if (!connectionId || connectionId === oldConnectionId) return;
+      // Drop in-flight progressive list from the previous tab so it cannot paint into the new tab.
+      listRequestId += 1;
+      try { listAbortController?.abort(); } catch {}
+      listAbortController = null;
+      listLoadingMore.value = false;
+      tableState.refreshing = false;
       if (tabSilentRefreshTimer) {
         clearTimeout(tabSilentRefreshTimer);
         tabSilentRefreshTimer = null;
@@ -1217,6 +1230,8 @@ export default defineComponent({
 
       const cached = bucketStateMap[connectionId] as any;
       restoreNavHistory(connectionId);
+      // Ensure S3 client/target follows the tab before any restore paint or silent refresh.
+      try { applyStorageContext(); } catch (e) { console.error('[STORAGE] tab switch applyStorageContext failed:', e); }
       if (cached) {
         setTableSource(cached.tableSource || []);
         tableState.currentDirectory = cached.currentDirectory;
@@ -3238,6 +3253,15 @@ export default defineComponent({
       // 不再每次 listObjects 都调用 changeConfig/setTarget，
       // 存储上下文由 applyStorageContext 统一管理
       const requestId = ++listRequestId;
+      // Capture owner context so stale progressive pages cannot paint into another tab.
+      const ownerConnectionId = activeConnectionId.value;
+      const ownerBucket = activeBucket.value || '';
+      const ownerPathPrefix = activePathPrefix.value || '';
+      const isCurrentListOwner = () =>
+        requestId === listRequestId
+        && activeConnectionId.value === ownerConnectionId
+        && (activeBucket.value || '') === ownerBucket
+        && (activePathPrefix.value || '') === ownerPathPrefix;
       try { listAbortController?.abort(); } catch {}
       listAbortController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
       const abortSignal = listAbortController?.signal;
@@ -3275,7 +3299,8 @@ export default defineComponent({
       let firstPaintDone = false;
 
       const persistBucketState = (token: string | null) => {
-        bucketStateMap[activeConnectionId.value] = {
+        if (!isCurrentListOwner()) return;
+        bucketStateMap[ownerConnectionId] = {
           tableSource: tableSource.value,
           cachedAt: Date.now(),
           currentDirectory: tableState.currentDirectory,
@@ -3303,12 +3328,12 @@ export default defineComponent({
           }
           sortObjectInfos(deduped);
           rows = await compactDirectoryChains(deduped, { enabled: true });
-          if (requestId !== listRequestId) return;
+          if (!isCurrentListOwner()) return;
           sortObjectInfos(rows);
         } else {
           rows = source.slice();
           sortObjectInfos(rows);
-          if (requestId !== listRequestId) return;
+          if (!isCurrentListOwner()) return;
         }
         setTableSource(rows);
         tableState.nextContinuationToken = token;
@@ -3345,11 +3370,11 @@ export default defineComponent({
       };
 
       const fetchPage = (token: string | null) => {
-        if (requestId !== listRequestId) return;
+        if (!isCurrentListOwner()) return;
         storage
           .listObjects(defaultStorage, tableState.currentDirectory, token, abortSignal ? { abortSignal } : undefined)
           .then(async (resp: ListObjectsResponse) => {
-            if (requestId !== listRequestId) return;
+            if (!isCurrentListOwner()) return;
             if (!resp.success) {
               if (resp.desc === 'aborted' || abortSignal?.aborted) return;
               if (!silent || !firstPaintDone) {
@@ -3380,12 +3405,12 @@ export default defineComponent({
             if (nextToken) {
               // Yield to UI thread between S3 pages.
               setTimeout(() => {
-                if (requestId === listRequestId) fetchPage(nextToken);
+                if (isCurrentListOwner()) fetchPage(nextToken);
               }, 0);
             }
           })
           .catch(async (error) => {
-            if (requestId !== listRequestId) return;
+            if (!isCurrentListOwner()) return;
             const msg = error instanceof Error ? error.message : String(error || '');
             if (abortSignal?.aborted || /abort/i.test(msg)) return;
             console.warn('[listObjects] page failed:', error);
