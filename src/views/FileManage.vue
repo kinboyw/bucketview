@@ -3377,9 +3377,11 @@ export default defineComponent({
       // 1) first page paints ASAP
       // 2) remaining pages continue in background
       // 3) switching directory bumps listRequestId and cancels stale pages
-      const buffer: ObjectInfo[] = silent ? [...tableSource.value] : [];
+      // 4) silent refresh rebuilds into a fresh buffer (never append onto old rows)
+      const buffer: ObjectInfo[] = [];
+      const seenObjectNames = new Set<string>();
       let pages = 0;
-      let firstPaintDone = silent && tableSource.value.length > 0;
+      let firstPaintDone = false;
 
       const persistBucketState = (token: string | null) => {
         bucketStateMap[activeConnectionId.value] = {
@@ -3394,8 +3396,17 @@ export default defineComponent({
       };
 
       const applyListResult = async (source: ObjectInfo[], token: string | null, opts?: { final?: boolean; error?: boolean }) => {
-        sortObjectInfos(source);
-        const compactedSource = await compactDirectoryChains(source);
+        // Safety net: unique by objectName before sort/compact/paint.
+        const deduped: ObjectInfo[] = [];
+        const seen = new Set<string>();
+        for (const item of source) {
+          const key = item.objectName || item.name;
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          deduped.push(item);
+        }
+        sortObjectInfos(deduped);
+        const compactedSource = await compactDirectoryChains(deduped);
         if (requestId !== listRequestId) return;
         sortObjectInfos(compactedSource);
         setTableSource([...compactedSource]);
@@ -3413,10 +3424,13 @@ export default defineComponent({
 
       const appendPageObjects = (objectInfos: ObjectInfo[]) => {
         for (const objectInfo of objectInfos) {
+          const key = objectInfo.objectName || objectInfo.name;
+          if (!key || seenObjectNames.has(key)) continue;
           if (
             tableState.currentDirectory == objectInfo.objectName.split('/').slice(0, -1).join('/') ||
             objectInfo.type == 'directory'
           ) {
+            seenObjectNames.add(key);
             buffer.push(objectInfo);
           }
         }
@@ -3441,12 +3455,11 @@ export default defineComponent({
             appendPageObjects(resp.objectInfos || []);
 
             const nextToken = resp.nextContinuationToken || null;
-            // First page: paint immediately so large buckets become interactive fast.
-            if (!firstPaintDone) {
+            // Paint first page immediately; then every 2 pages, and always on the final page.
+            // Avoid applying twice on the last page (previous code had a trailing final apply).
+            const shouldPaint = !firstPaintDone || !nextToken || pages % 2 === 0;
+            if (shouldPaint) {
               firstPaintDone = true;
-              await applyListResult(buffer, nextToken, { final: !nextToken });
-            } else if (!nextToken || pages % 2 === 0) {
-              // Refresh UI every 2 pages afterward to reduce reactive churn.
               await applyListResult(buffer, nextToken, { final: !nextToken });
             } else {
               tableState.nextContinuationToken = nextToken;
@@ -3459,8 +3472,6 @@ export default defineComponent({
               setTimeout(() => {
                 if (requestId === listRequestId) fetchPage(nextToken);
               }, 0);
-            } else {
-              await applyListResult(buffer, null, { final: true });
             }
           })
           .catch(async (error) => {
