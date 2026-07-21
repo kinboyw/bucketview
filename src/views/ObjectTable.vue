@@ -285,13 +285,15 @@ export default defineComponent({
 
     onMounted(() => {
       window.addEventListener('resize', onResize);
-      nextTick(calcTableScrollHeight);
-      if (tableWrapperRef.value) {
-        tableWrapperRef.value.addEventListener('scroll', handleTableBodyScroll, {
-          capture: true,
-          passive: true,
-        } as any);
-      }
+      nextTick(() => {
+        calcTableScrollHeight();
+        if (tableWrapperRef.value) {
+          tableWrapperRef.value.addEventListener('scroll', handleTableBodyScroll, {
+            capture: true,
+            passive: true,
+          } as any);
+        }
+      });
     });
 
     onUnmounted(() => {
@@ -322,9 +324,19 @@ export default defineComponent({
     watch(
       () => props.dataSource,
       (next, prev) => {
-        const prevLen = Array.isArray(prev) ? prev.length : 0;
-        const nextLen = Array.isArray(next) ? next.length : 0;
-        if (nextLen === 0 || nextLen < prevLen) waterfallLimit.value = WATERFALL_PAGE;
+        // Reset window when list is replaced/cleared, not when progressive append grows it.
+        if (!Array.isArray(next) || next.length === 0) {
+          waterfallLimit.value = WATERFALL_PAGE;
+          return;
+        }
+        if (!Array.isArray(prev) || prev.length === 0) {
+          waterfallLimit.value = WATERFALL_PAGE;
+          return;
+        }
+        // Different array identity with smaller/equal size => directory switch or silent refresh.
+        if (next !== prev && next.length <= prev.length) {
+          waterfallLimit.value = WATERFALL_PAGE;
+        }
       },
     );
 

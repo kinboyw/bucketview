@@ -1540,6 +1540,9 @@ export default defineComponent({
     let listAbortController: AbortController | null = null;
     const listLoadingMore = ref(false);
     const listLoadedPages = ref(0);
+    // Debounced list filter (declared early for unmount cleanup).
+    const listFilterKeyword = ref("");
+    let searchFilterTimer: ReturnType<typeof setTimeout> | null = null;
     const bucketDirectoryMap: Record<string, string> = {};
     const bucketStateMap: Record<string, {
       tableSource: ObjectInfo[];
@@ -1683,18 +1686,28 @@ export default defineComponent({
     };
 
     const handleSelectAll = () => {
-      const allKeys = filteredSource.value.map(item => item.objectName);
+      const source = filteredSource.value;
+      const allKeys = new Array(source.length);
+      for (let i = 0; i < source.length; i++) allKeys[i] = source[i].objectName;
       Object.assign(tableState, {
         selectedRowKeys: allKeys,
-        selectedRows: [...filteredSource.value],
+        selectedRows: source.slice(),
       });
       hideContextMenu();
     };
 
     const handleInvertSelection = () => {
-      const allKeys = filteredSource.value.map(item => item.objectName);
-      const invertedKeys = allKeys.filter(key => !tableState.selectedRowKeys.includes(key));
-      const invertedRows = filteredSource.value.filter(item => invertedKeys.includes(item.objectName));
+      const selected = new Set(tableState.selectedRowKeys as string[]);
+      const invertedKeys: string[] = [];
+      const invertedRows: ObjectInfo[] = [];
+      const source = filteredSource.value;
+      for (let i = 0; i < source.length; i++) {
+        const item = source[i];
+        if (!selected.has(item.objectName)) {
+          invertedKeys.push(item.objectName);
+          invertedRows.push(item);
+        }
+      }
       Object.assign(tableState, {
         selectedRowKeys: invertedKeys,
         selectedRows: invertedRows,
@@ -1775,6 +1788,10 @@ export default defineComponent({
     };
 
     onUnmounted(() => {
+      if (searchFilterTimer) {
+        clearTimeout(searchFilterTimer);
+        searchFilterTimer = null;
+      }
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('click', handleClickOutside);
       window.removeEventListener('mouseup', handleMouseButton);
@@ -2697,7 +2714,14 @@ export default defineComponent({
     };
 
     const applySelection = (keys: string[]) => {
-      const rows = filteredSource.value.filter(item => keys.includes(item.objectName));
+      // O(n) lookup — avoid keys.includes() per row on large multi-select.
+      const keySet = new Set(keys as string[]);
+      const rows: ObjectInfo[] = [];
+      const source = filteredSource.value;
+      for (let i = 0; i < source.length; i++) {
+        const item = source[i];
+        if (keySet.has(item.objectName)) rows.push(item);
+      }
       Object.assign(tableState, {
         selectedRowKeys: keys as any,
         selectedRows: rows,
@@ -2771,17 +2795,39 @@ export default defineComponent({
       }
     };
 
-    const filteredSource = computed(() => {
-      const kw = tableState.searchKeyword.trim().toLowerCase();
-      if (!kw) return tableSource.value;
-      return tableSource.value.filter(item => item.name.toLowerCase().includes(kw));
-    });
+    // Debounced filter keyword: empty clears immediately; typing waits ~120ms.
     watch(
-      () => tableState.keyword,
-      () => {
+      () => tableState.searchKeyword,
+      (raw) => {
         paginationState.current = 1;
+        const kw = (raw || "").trim().toLowerCase();
+        if (!kw) {
+          if (searchFilterTimer) {
+            clearTimeout(searchFilterTimer);
+            searchFilterTimer = null;
+          }
+          listFilterKeyword.value = "";
+          return;
+        }
+        if (searchFilterTimer) clearTimeout(searchFilterTimer);
+        searchFilterTimer = setTimeout(() => {
+          searchFilterTimer = null;
+          listFilterKeyword.value = kw;
+        }, 120);
       },
     );
+
+    const filteredSource = computed(() => {
+      const kw = listFilterKeyword.value;
+      if (!kw) return tableSource.value;
+      const rows = tableSource.value;
+      const out: ObjectInfo[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const item = rows[i];
+        if (item.name && item.name.toLowerCase().includes(kw)) out.push(item);
+      }
+      return out;
+    });
 
     const tableHasSelected = computed(() => tableState.selectedRowKeys.length > 0);
     const configDrawerVisible = ref(false);
@@ -3210,21 +3256,29 @@ export default defineComponent({
       };
 
       const applyListResult = async (source: ObjectInfo[], token: string | null, opts?: { final?: boolean; error?: boolean }) => {
-        // Safety net: unique by objectName before sort/compact/paint.
-        const deduped: ObjectInfo[] = [];
-        const seen = new Set<string>();
-        for (const item of source) {
-          const key = item.objectName || item.name;
-          if (!key || seen.has(key)) continue;
-          seen.add(key);
-          deduped.push(item);
+        // Intermediate paints: sort only (buffer is already unique via seenObjectNames).
+        // Final paint: safety dedupe + directory compact once — avoids N compact probes per page.
+        let rows: ObjectInfo[];
+        if (opts?.final) {
+          const deduped: ObjectInfo[] = [];
+          const seen = new Set<string>();
+          for (let i = 0; i < source.length; i++) {
+            const item = source[i];
+            const key = item.objectName || item.name;
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            deduped.push(item);
+          }
+          sortObjectInfos(deduped);
+          rows = await compactDirectoryChains(deduped, { enabled: true });
+          if (requestId !== listRequestId) return;
+          sortObjectInfos(rows);
+        } else {
+          rows = source.slice();
+          sortObjectInfos(rows);
+          if (requestId !== listRequestId) return;
         }
-        sortObjectInfos(deduped);
-        const shouldCompact = !silent || !!opts?.final;
-        const compactedSource = await compactDirectoryChains(deduped, { enabled: shouldCompact });
-        if (requestId !== listRequestId) return;
-        sortObjectInfos(compactedSource);
-        setTableSource([...compactedSource]);
+        setTableSource(rows);
         tableState.nextContinuationToken = token;
         listLoadedPages.value = pages;
         if (!silent) tableState.loading = false;
@@ -3238,13 +3292,20 @@ export default defineComponent({
       };
 
       const appendPageObjects = (objectInfos: ObjectInfo[]) => {
-        for (const objectInfo of objectInfos) {
+        const currentDir = tableState.currentDirectory;
+        for (let i = 0; i < objectInfos.length; i++) {
+          const objectInfo = objectInfos[i];
           const key = objectInfo.objectName || objectInfo.name;
           if (!key || seenObjectNames.has(key)) continue;
-          if (
-            tableState.currentDirectory == objectInfo.objectName.split('/').slice(0, -1).join('/') ||
-            objectInfo.type == 'directory'
-          ) {
+          if (objectInfo.type === 'directory') {
+            seenObjectNames.add(key);
+            buffer.push(objectInfo);
+            continue;
+          }
+          // Parent path without split/slice/join allocations.
+          const slash = objectInfo.objectName.lastIndexOf('/');
+          const parent = slash === -1 ? '' : objectInfo.objectName.slice(0, slash);
+          if (parent === currentDir) {
             seenObjectNames.add(key);
             buffer.push(objectInfo);
           }
