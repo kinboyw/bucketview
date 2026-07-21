@@ -154,15 +154,28 @@ export const useConfigStore = defineStore('config', {
     serializer: {
       serialize(value) {
         try {
+          const g = globalThis as any;
           const native = (window as any).native as { encryptSecret?: (v: string) => string } | undefined;
-          const clone = JSON.parse(JSON.stringify(value));
-          if (Array.isArray(clone.connections) && native?.encryptSecret) {
-            clone.connections = clone.connections.map((conn: any) => ({
-              ...conn,
-              accessKeySecret: native.encryptSecret?.(conn.accessKeySecret || '') || conn.accessKeySecret,
-            }));
+          // Tab switches only touch active ids; reuse last encrypted connections payload.
+          const connections = (value as any)?.connections;
+          let encryptedConnections = g.__bvEncryptedConnections;
+          if (connections !== g.__bvConnectionsRef || !encryptedConnections) {
+            const cloneConnections = JSON.parse(JSON.stringify(connections || []));
+            if (Array.isArray(cloneConnections) && native?.encryptSecret) {
+              encryptedConnections = cloneConnections.map((conn: any) => ({
+                ...conn,
+                accessKeySecret: native.encryptSecret?.(conn.accessKeySecret || '') || conn.accessKeySecret,
+              }));
+            } else {
+              encryptedConnections = cloneConnections;
+            }
+            g.__bvConnectionsRef = connections;
+            g.__bvEncryptedConnections = encryptedConnections;
           }
-          return JSON.stringify(clone);
+          return JSON.stringify({
+            ...value,
+            connections: encryptedConnections,
+          });
         } catch {
           return JSON.stringify(value);
         }

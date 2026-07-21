@@ -1275,41 +1275,66 @@ export default defineComponent({
       }
     });
 
+    // Debounced silent refresh after tab restore — cancel if user keeps switching.
+    let tabSilentRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let tabSilentRefreshToken = 0;
+    const scheduleTabSilentRefresh = (connectionId: string, directory: string) => {
+      if (tabSilentRefreshTimer) {
+        clearTimeout(tabSilentRefreshTimer);
+        tabSilentRefreshTimer = null;
+      }
+      const token = ++tabSilentRefreshToken;
+      tabSilentRefreshTimer = setTimeout(() => {
+        tabSilentRefreshTimer = null;
+        if (token !== tabSilentRefreshToken) return;
+        if (activeConnectionId.value !== connectionId) return;
+        handleStorageListObjects(directory, false, true);
+      }, 600);
+    };
+
     watch(activeConnectionId, (connectionId, oldConnectionId) => {
       if (!connectionId || connectionId === oldConnectionId) return;
+      if (tabSilentRefreshTimer) {
+        clearTimeout(tabSilentRefreshTimer);
+        tabSilentRefreshTimer = null;
+      }
+      tabSilentRefreshToken += 1;
+
       if (oldConnectionId) {
         saveNavHistory(oldConnectionId);
         bucketDirectoryMap[oldConnectionId] = tableState.currentDirectory || '/';
         bucketStateMap[oldConnectionId] = {
-          tableSource: [...tableSource.value],
+          tableSource: tableSource.value,
           currentDirectory: tableState.currentDirectory,
           searchDirectory: tableState.searchDirectory,
-          breadcrumbDirectory: [...tableState.breadcrumbDirectory],
+          breadcrumbDirectory: tableState.breadcrumbDirectory.slice(),
           searchKeyword: tableState.searchKeyword,
           nextContinuationToken: tableState.nextContinuationToken,
           paginationCurrent: paginationState.current,
-        };
+          cachedAt: Date.now(),
+        } as any;
       }
       const conn = configStore.getConnectionById(connectionId);
       if (!conn) return;
-      // 存储上下文由 applyStorageContext watcher 管理，此处不再手动调用
 
-      const cached = bucketStateMap[connectionId];
+      const cached = bucketStateMap[connectionId] as any;
       restoreNavHistory(connectionId);
       if (cached) {
-        // 先恢复缓存状态，用户立即看到旧视图（无 loading）
-        setTableSource([...(cached.tableSource || [])]);
+        setTableSource(cached.tableSource || []);
         tableState.currentDirectory = cached.currentDirectory;
         tableState.searchDirectory = cached.searchDirectory;
-        tableState.breadcrumbDirectory = [...cached.breadcrumbDirectory];
+        tableState.breadcrumbDirectory = [...(cached.breadcrumbDirectory || [])];
         tableState.searchKeyword = cached.searchKeyword;
         tableState.nextContinuationToken = cached.nextContinuationToken;
         paginationState.current = cached.paginationCurrent;
         tableState.selectedRowKeys = [];
         tableState.selectedRows = [];
         tableState.loading = false;
-        // 后台静默刷新：确保切换回的视图与服务端一致（覆盖上传等异步变更）
-        handleStorageListObjects(cached.currentDirectory, false, true);
+        listLoadingMore.value = false;
+        const age = Date.now() - (cached.cachedAt || 0);
+        if (age > 3000) {
+          scheduleTabSilentRefresh(connectionId, cached.currentDirectory || '');
+        }
       } else {
         const dir = bucketDirectoryMap[connectionId] || '/';
         paginationState.current = 1;
@@ -1585,57 +1610,84 @@ export default defineComponent({
 
     const getFileIcon = (filename: string) => getFileIconInfo(filename).icon;
 
-    const COMPACT_DIRECTORY_MAX_DEPTH = 16;
-    const COMPACT_DIRECTORY_MAX_ITEMS = 80;
+    const COMPACT_DIRECTORY_MAX_DEPTH = 8;
+    const COMPACT_DIRECTORY_MAX_ITEMS = 40;
+    const COMPACT_CONCURRENCY = 3;
+    const directoryCompactCache = new Map<string, ObjectInfo>();
 
     const shouldCompactDirectories = () => {
       if (isInVirtualBucketList.value) return false;
       return !!activeBucket.value;
     };
 
+    const compactCacheKey = (objectName: string) => {
+      return `${activeConnectionId.value || ''}|${activeBucket.value || ''}|${objectName}`;
+    };
+
     const compactSingleDirectoryChain = async (dir: ObjectInfo): Promise<ObjectInfo> => {
+      if (dir.name && dir.name.includes('/')) return dir;
+      const cacheKey = compactCacheKey(dir.objectName);
+      const cached = directoryCompactCache.get(cacheKey);
+      if (cached) {
+        return { ...dir, name: cached.name, objectName: cached.objectName, type: 'directory' };
+      }
       let cursor = dir.objectName;
       const nameParts = [dir.name];
       const visited = new Set([cursor]);
-
       for (let depth = 0; depth < COMPACT_DIRECTORY_MAX_DEPTH; depth++) {
         const resp = await storage.listObjects(defaultStorage, cursor, '');
         if (!resp.success || resp.nextContinuationToken) break;
-
         const children = resp.objectInfos;
         if (children.length !== 1 || children[0].type !== 'directory') break;
-
         const nextDir = children[0];
         if (!nextDir.objectName || nextDir.objectName === cursor || visited.has(nextDir.objectName)) break;
-
         visited.add(nextDir.objectName);
         nameParts.push(nextDir.name);
         cursor = nextDir.objectName;
       }
-
-      if (cursor === dir.objectName) return dir;
-      return {
+      if (cursor === dir.objectName) {
+        directoryCompactCache.set(cacheKey, dir);
+        return dir;
+      }
+      const compacted = {
         ...dir,
         name: nameParts.join('/'),
         objectName: cursor,
-        type: 'directory',
+        type: 'directory' as const,
       };
+      directoryCompactCache.set(cacheKey, compacted);
+      directoryCompactCache.set(compactCacheKey(cursor), compacted);
+      return compacted;
     };
 
-    const compactDirectoryChains = async (objectInfos: ObjectInfo[]) => {
-      if (!shouldCompactDirectories()) return objectInfos;
-      const directoryCount = objectInfos.filter(item => item.type === 'directory').length;
-      if (directoryCount === 0 || directoryCount > COMPACT_DIRECTORY_MAX_ITEMS) return objectInfos;
-
-      const compacted = await Promise.all(objectInfos.map(async item => {
-        if (item.type !== 'directory') return item;
-        try {
-          return await compactSingleDirectoryChain(item);
-        } catch {
-          return item;
+    const mapWithConcurrency = async <T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> => {
+      const results = new Array<R>(items.length);
+      let nextIndex = 0;
+      const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (nextIndex < items.length) {
+          const current = nextIndex++;
+          results[current] = await worker(items[current]);
         }
-      }));
-      return compacted;
+      });
+      await Promise.all(runners);
+      return results;
+    };
+
+    const compactDirectoryChains = async (objectInfos: ObjectInfo[], opts?: { enabled?: boolean }) => {
+      if (opts?.enabled === false) return objectInfos;
+      if (!shouldCompactDirectories()) return objectInfos;
+      const directories = objectInfos.filter(item => item.type === 'directory');
+      if (directories.length === 0 || directories.length > COMPACT_DIRECTORY_MAX_ITEMS) return objectInfos;
+      const needProbe = directories.filter(d => d.name && !d.name.includes('/'));
+      if (needProbe.length === 0) return objectInfos;
+      const probed = await mapWithConcurrency(needProbe, COMPACT_CONCURRENCY, async (item) => {
+        try { return await compactSingleDirectoryChain(item); } catch { return item; }
+      });
+      const probedByOriginal = new Map(needProbe.map((item, idx) => [item.objectName, probed[idx]]));
+      return objectInfos.map((item) => {
+        if (item.type !== 'directory') return item;
+        return probedByOriginal.get(item.objectName) || item;
+      });
     };
 
     let listRequestId = 0;
@@ -3385,10 +3437,11 @@ export default defineComponent({
 
       const persistBucketState = (token: string | null) => {
         bucketStateMap[activeConnectionId.value] = {
-          tableSource: [...tableSource.value],
+          tableSource: tableSource.value,
+          cachedAt: Date.now(),
           currentDirectory: tableState.currentDirectory,
           searchDirectory: tableState.searchDirectory,
-          breadcrumbDirectory: [...tableState.breadcrumbDirectory],
+          breadcrumbDirectory: tableState.breadcrumbDirectory.slice(),
           searchKeyword: tableState.searchKeyword,
           nextContinuationToken: token,
           paginationCurrent: paginationState.current,
@@ -3406,7 +3459,8 @@ export default defineComponent({
           deduped.push(item);
         }
         sortObjectInfos(deduped);
-        const compactedSource = await compactDirectoryChains(deduped);
+        const shouldCompact = !silent || !!opts?.final;
+        const compactedSource = await compactDirectoryChains(deduped, { enabled: shouldCompact });
         if (requestId !== listRequestId) return;
         sortObjectInfos(compactedSource);
         setTableSource([...compactedSource]);
