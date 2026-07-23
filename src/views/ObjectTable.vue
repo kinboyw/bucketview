@@ -697,6 +697,8 @@ export default defineComponent({
 }
 
 .custom-pagination {
+  position: relative;
+  z-index: 1;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -706,7 +708,7 @@ export default defineComponent({
   margin: 0 !important;
   padding: 6px 12px;
   border-top: 1px solid var(--ant-color-border-secondary);
-  background: transparent;
+  background: var(--ant-color-bg-container);
   border-radius: 0 0 12px 12px;
 
   .status-bar {
@@ -926,4 +928,3 @@ export default defineComponent({
   100% { transform: scale(1); opacity: 1; }
 }
 </style>
-
