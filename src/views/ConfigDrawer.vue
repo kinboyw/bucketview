@@ -133,51 +133,68 @@
     </div>
 
     <!-- 系统设置 -->
-    <div v-if="activeTab === 'system'" class="drawer-content">
-      <div class="setting-card">
-        <div class="setting-form-row">
-          <span class="setting-form-label">挂载程序</span>
-          <div class="setting-form-control">
-            <a-input v-model:value="fuseBinValue" size="small" style="width: calc(100% - 32px)" placeholder="留空则首次挂载自动下载 rclone" @change="handleFuseBinChange" />
-            <a-button size="small" @click="handleSelectFuse">
-              <FolderOpenOutlined />
-            </a-button>
-          </div>
+    <div v-if="activeTab === 'system'" class="drawer-content drawer-content-settings">
+      <div class="setting-section">
+        <div class="setting-section-head">
+          <div class="setting-section-title">路径与目录</div>
+          <div class="setting-section-desc">管理挂载程序、缓存位置和下载落点。</div>
         </div>
-        <div class="setting-desc">默认不内置 rclone（减小安装包）。首次挂载会自动下载到用户目录；也可手动指定本地 rclone 路径。</div>
-        <div class="setting-form-row">
-          <span class="setting-form-label">默认缓存目录</span>
-          <div class="setting-form-control">
-            <a-input v-model:value="defaultCacheDirectoryValue" size="small" style="width: calc(100% - 32px)" placeholder="未设置时使用系统临时目录" @change="handleDefaultCacheDirectoryChange" />
-            <a-button size="small" @click="handleSelectDefaultCacheDirectory">
-              <FolderOpenOutlined />
-            </a-button>
+        <div class="setting-field">
+          <div class="setting-field-main">
+            <span class="setting-form-label">挂载程序</span>
+            <div class="setting-form-control">
+              <a-input v-model:value="fuseBinValue" size="small" placeholder="留空则首次挂载自动下载 rclone" @change="handleFuseBinChange" />
+              <a-button size="small" @click="handleSelectFuse">
+                <FolderOpenOutlined />
+              </a-button>
+            </div>
           </div>
+          <div class="setting-desc">默认不内置 rclone。首次挂载会自动下载到用户目录，也可手动指定本地 rclone 路径。</div>
         </div>
-        <div class="setting-desc">存储桶挂载时缓存路径的默认值，留空则使用系统临时目录</div>
-        <div class="setting-form-row" style="margin-top: 10px">
-          <span class="setting-form-label">默认下载目录</span>
-          <div class="setting-form-control">
-            <a-input v-model:value="defaultDownloadDirectoryValue" size="small" style="width: calc(100% - 32px)" placeholder="未设置时每次下载需选择目录" @change="handleDefaultDownloadDirectoryChange" />
-            <a-button size="small" @click="handleSelectDefaultDownloadDirectory">
-              <FolderOpenOutlined />
-            </a-button>
+        <div class="setting-field">
+          <div class="setting-field-main">
+            <span class="setting-form-label">默认缓存目录</span>
+            <div class="setting-form-control">
+              <a-input v-model:value="defaultCacheDirectoryValue" size="small" placeholder="未设置时使用系统临时目录" @change="handleDefaultCacheDirectoryChange" />
+              <a-button size="small" @click="handleSelectDefaultCacheDirectory">
+                <FolderOpenOutlined />
+              </a-button>
+            </div>
           </div>
+          <div class="setting-desc">存储桶挂载时缓存路径的默认值，留空则使用系统临时目录。</div>
         </div>
-        <div class="setting-desc">指定后下载文件时直接使用此目录，不再弹出目录选择框</div>
-        <div class="setting-form-row" style="margin-top: 10px">
+        <div class="setting-field">
+          <div class="setting-field-main">
+            <span class="setting-form-label">默认下载目录</span>
+            <div class="setting-form-control">
+              <a-input v-model:value="defaultDownloadDirectoryValue" size="small" placeholder="未设置时每次下载需选择目录" @change="handleDefaultDownloadDirectoryChange" />
+              <a-button size="small" @click="handleSelectDefaultDownloadDirectory">
+                <FolderOpenOutlined />
+              </a-button>
+            </div>
+          </div>
+          <div class="setting-desc">指定后下载文件会直接使用此目录，不再弹出目录选择框。</div>
+        </div>
+      </div>
+
+      <div class="setting-section">
+        <div class="setting-section-head">
+          <div class="setting-section-title">列表与传输</div>
+          <div class="setting-section-desc">控制文件列表呈现方式和后台任务并发。</div>
+        </div>
+        <div class="setting-field setting-field-inline">
           <span class="setting-form-label">默认列表行数</span>
           <div class="setting-form-control">
-            <a-select v-model:value="defaultPageSizeValue" size="small" style="width: 100px" @change="handleDefaultPageSizeChange">
+            <a-select v-model:value="defaultPageSizeValue" size="small" class="setting-select-sm" @change="handleDefaultPageSizeChange">
               <a-select-option :value="10">10 行/页</a-select-option>
               <a-select-option :value="20">20 行/页</a-select-option>
               <a-select-option :value="50">50 行/页</a-select-option>
               <a-select-option :value="100">100 行/页</a-select-option>
             </a-select>
           </div>
+          <div class="setting-desc">文件列表每页默认显示的行数，可在列表页临时调整。</div>
         </div>
-        <div class="setting-desc">文件列表每页默认显示的行数，可在列表页临时调整</div>
-        <div class="setting-form-row" style="margin-top: 10px">
+        <div class="setting-field setting-field-inline">
           <span class="setting-form-label">列表加载模式</span>
           <div class="setting-form-control">
             <a-radio-group v-model:value="listLoadModeValue" size="small" @change="handleListLoadModeChange">
@@ -185,12 +202,12 @@
               <a-radio-button value="pagination">翻页</a-radio-button>
             </a-radio-group>
           </div>
+          <div class="setting-desc">瀑布流通过滚动加载更多文件；翻页通过页码切换。</div>
         </div>
-        <div class="setting-desc">瀑布流模式下通过滚动鼠标加载更多文件；翻页模式下通过页码翻页</div>
-        <div class="setting-form-row" style="margin-top: 10px">
+        <div class="setting-field setting-field-inline">
           <span class="setting-form-label">传输并发数</span>
           <div class="setting-form-control">
-            <a-select v-model:value="transferConcurrencyValue" size="small" style="width: 120px" @change="handleTransferConcurrencyChange">
+            <a-select v-model:value="transferConcurrencyValue" size="small" class="setting-select-md" @change="handleTransferConcurrencyChange">
               <a-select-option :value="1">1（串行）</a-select-option>
               <a-select-option :value="2">2</a-select-option>
               <a-select-option :value="3">3（推荐）</a-select-option>
@@ -199,10 +216,16 @@
               <a-select-option :value="8">8</a-select-option>
             </a-select>
           </div>
+          <div class="setting-desc">重启应用后完全生效；值越大吞吐越高，也更吃带宽与 CPU。</div>
         </div>
-        <div class="setting-desc">同时进行的上传/下载任务数。重启应用后完全生效；值越大吞吐越高，也更吃带宽与 CPU。</div>
-        <div class="setting-divider"></div>
-        <div class="setting-form-row">
+      </div>
+
+      <div class="setting-section">
+        <div class="setting-section-head">
+          <div class="setting-section-title">行为与外观</div>
+          <div class="setting-section-desc">设置关闭行为、诊断入口和连接主题色。</div>
+        </div>
+        <div class="setting-field setting-field-inline">
           <span class="setting-form-label">关闭主窗口时</span>
           <div class="setting-form-control">
             <a-radio-group v-model:value="closeBehaviorValue" size="small" @change="handleCloseBehaviorChange">
@@ -210,8 +233,8 @@
               <a-radio-button value="exit">退出应用</a-radio-button>
             </a-radio-group>
           </div>
+          <div class="setting-desc">默认保留任务栏通知区域图标，后台传输、挂载等任务可继续运行。</div>
         </div>
-        <div class="setting-desc">默认隐藏主窗口并保留任务栏通知区域图标，后台传输、挂载等任务可继续运行。</div>
         <div v-if="closeBehaviorValue === 'exit'" class="setting-row setting-sub-row">
           <div>
             <div class="setting-label">退出前显示影响提示</div>
@@ -219,20 +242,20 @@
           </div>
           <a-switch v-model:checked="confirmBeforeExitValue" size="small" @change="handleConfirmBeforeExitChange" />
         </div>
-        <div class="setting-form-row" style="margin-top: 10px">
+        <div class="setting-field setting-field-inline">
           <span class="setting-form-label">诊断日志</span>
           <div class="setting-form-control">
             <a-button size="small" @click="handleOpenLogDirectory">打开日志目录</a-button>
           </div>
+          <div class="setting-desc">用于排查崩溃、更新失败、传输异常等问题。日志仅保存在本机。</div>
         </div>
-        <div class="setting-desc">用于排查崩溃、更新失败、传输异常等问题。日志仅保存在本机。</div>
-        <div class="setting-form-row color-group-row">
+        <div class="setting-field setting-field-inline color-group-row">
           <span class="setting-form-label">连接主题色组</span>
           <div class="setting-form-control">
             <a-button size="small" @click="handleCopyColorGroup">复制为自定义</a-button>
           </div>
+          <div class="setting-desc">连接和标签页主题色会按当前色组循环分配，数量超过色号数量时允许重复。</div>
         </div>
-        <div class="setting-desc">连接和标签页主题色会按当前色组循环分配，连接数量超过色号数量时允许重复。</div>
         <div class="color-group-picker">
           <div
             v-for="group in connectionColorGroups"
@@ -1619,6 +1642,12 @@ export default defineComponent({
 }
 
 .drawer-content { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 0; background: transparent; flex: 1; min-height: 0; overflow: auto; }
+.drawer-content-settings {
+  gap: 12px;
+  padding-top: 12px;
+  background:
+    linear-gradient(to bottom, var(--ant-color-bg-container), var(--ant-color-bg-layout));
+}
 .drawer-content-bucket { padding-bottom: 0; overflow: hidden; }
 .connection-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 0 8px; }
 .drawer-footer-actions { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--ant-color-border-secondary); background: var(--ant-color-bg-container); flex-shrink: 0; .add-btn-row { flex: 1; } }
@@ -1879,6 +1908,124 @@ export default defineComponent({
     .color-picker-input { width: 26px; height: 24px; padding: 0; border: 1px solid var(--ant-color-border); border-radius: 4px; background: transparent; cursor: pointer; }
     .color-hex-input { flex: 1; min-width: 0; font-size: 11px; }
     .ant-btn { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; color: var(--ant-color-text-tertiary); &:hover { color: #ef4444; background: rgba(239, 68, 68, 0.1); } }
+  }
+}
+
+.setting-section {
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: 8px;
+  background: var(--ant-color-bg-container);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  overflow: hidden;
+
+  .setting-section-head {
+    padding: 10px 12px 9px;
+    border-bottom: 1px solid var(--ant-color-border-secondary);
+    background: var(--ant-color-fill-quaternary);
+  }
+
+  .setting-section-title {
+    font-size: 12px;
+    line-height: 18px;
+    font-weight: 600;
+    color: var(--ant-color-text);
+  }
+
+  .setting-section-desc {
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--ant-color-text-tertiary);
+  }
+
+  .setting-field {
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--ant-color-border-secondary);
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  .setting-field-main,
+  .setting-field-inline {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    align-items: center;
+    column-gap: 12px;
+  }
+
+  .setting-field-inline .setting-desc {
+    grid-column: 2;
+  }
+
+  .setting-form-label {
+    font-size: 12px;
+    line-height: 24px;
+    color: var(--ant-color-text-secondary);
+    white-space: nowrap;
+  }
+
+  .setting-form-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+
+    .ant-input,
+    .ant-input-affix-wrapper {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .ant-btn {
+      flex: 0 0 auto;
+    }
+  }
+
+  .setting-select-sm {
+    width: 108px;
+  }
+
+  .setting-select-md {
+    width: 128px;
+  }
+
+  .setting-desc {
+    margin: 6px 0 0 104px;
+    font-size: 11px;
+    line-height: 16px;
+    color: var(--ant-color-text-tertiary);
+  }
+
+  .setting-sub-row {
+    margin: 0 12px 8px 104px;
+    padding: 8px 10px;
+    border: 1px solid var(--ant-color-border-secondary);
+    border-radius: 6px;
+    background: var(--ant-color-fill-quaternary);
+  }
+
+  .color-group-row {
+    padding-bottom: 8px;
+  }
+
+  .color-group-picker {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0 12px 12px 116px;
+    max-height: 360px;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  .color-group-editor {
+    margin: 0 12px 12px 116px;
+    padding: 10px;
+    border: 1px solid var(--ant-color-border-secondary);
+    border-radius: 6px;
+    background: var(--ant-color-bg-layout);
   }
 }
 

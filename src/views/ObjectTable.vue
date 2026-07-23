@@ -708,7 +708,9 @@ export default defineComponent({
   margin: 0 !important;
   padding: 6px 12px;
   border-top: 1px solid var(--ant-color-border-secondary);
-  background: var(--ant-color-bg-container);
+  background-color: var(--ant-color-bg-container) !important;
+  background: var(--ant-color-bg-container) !important;
+  backdrop-filter: none;
   border-radius: 0 0 12px 12px;
 
   .status-bar {
@@ -719,6 +721,7 @@ export default defineComponent({
     font-size: 11px;
     color: var(--ant-color-text-secondary);
     min-width: 0;
+    background: inherit;
 
     .status-item {
       display: inline-flex;
