@@ -1630,12 +1630,19 @@ export default defineComponent({
 .right-side-drawer {
   .ant-drawer-content,
   .ant-drawer-wrapper-body {
+    height: 100%;
     min-height: 0;
+  }
+
+  .ant-drawer-content {
+    display: flex;
+    flex-direction: column;
   }
 
   .ant-drawer-body {
     display: flex;
     flex-direction: column;
+    flex: 1;
     min-height: 0;
     overflow: hidden;
   }
@@ -1643,10 +1650,14 @@ export default defineComponent({
 
 .drawer-content { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 0; background: transparent; flex: 1; min-height: 0; overflow: auto; }
 .drawer-content-settings {
+  flex: 1;
+  min-height: 0;
   gap: 12px;
   padding-top: 12px;
+  padding-bottom: 24px;
   background:
     linear-gradient(to bottom, var(--ant-color-bg-container), var(--ant-color-bg-layout));
+  scrollbar-gutter: stable;
 }
 .drawer-content-bucket { padding-bottom: 0; overflow: hidden; }
 .connection-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 0 8px; }

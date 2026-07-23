@@ -272,9 +272,10 @@ export default defineComponent({
         tableScrollHeight.value = Math.max(windowHeight.value - 124, 200);
         return;
       }
-      const rect = wrapper.getBoundingClientRect();
       const paginationH = customPaginationRef.value?.offsetHeight || 42;
-      const available = windowHeight.value - rect.top - paginationH - 8;
+      const tableHeader = wrapper.querySelector('.ant-table-thead') as HTMLElement | null;
+      const tableHeaderH = tableHeader?.offsetHeight || 40;
+      const available = wrapper.clientHeight - paginationH - tableHeaderH;
       tableScrollHeight.value = Math.max(available, 200);
     };
 
