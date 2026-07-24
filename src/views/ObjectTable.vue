@@ -534,44 +534,73 @@ export default defineComponent({
   }
 
   .content-custom-loader {
+    --loader-size: 96px;
+    --loader-track: rgba(148, 163, 184, 0.18);
+    --loader-blue: #2f8cff;
+    --loader-cyan: #18d6ff;
+    --loader-violet: #8b5cf6;
+
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 16px;
     padding: 0;
     position: relative;
-    width: 80px;
-    height: 80px;
+    width: var(--loader-size);
+    height: var(--loader-size);
     margin: 0 auto;
+    filter: drop-shadow(0 10px 26px rgba(47, 140, 255, 0.18));
+
+    &::before {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 1px solid rgba(47, 140, 255, 0.38);
+      background: rgba(24, 214, 255, 0.16);
+      box-shadow: 0 0 18px rgba(24, 214, 255, 0.24);
+    }
 
     .content-loader-ring {
       position: absolute;
-      width: 100%;
-      height: 100%;
+      inset: 0;
       border-radius: 50%;
-      border: 3px solid transparent;
+      background:
+        conic-gradient(from 0deg, transparent 0 18%, var(--loader-blue) 22% 38%, transparent 44% 100%),
+        conic-gradient(var(--loader-track), var(--loader-track));
+      -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+      mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
 
       &:nth-child(1) {
-        border-top-color: #1890ff;
-        animation: object-table-spin1 1.5s linear infinite;
+        animation: object-table-spin1 1.1s cubic-bezier(0.5, 0.1, 0.35, 0.9) infinite;
       }
       &:nth-child(2) {
-        border-right-color: #52c41a;
-        animation: object-table-spin2 1.8s linear infinite;
+        inset: 10px;
+        background:
+          conic-gradient(from 120deg, transparent 0 16%, var(--loader-cyan) 20% 42%, transparent 48% 100%),
+          conic-gradient(var(--loader-track), var(--loader-track));
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+        animation: object-table-spin2 1.6s cubic-bezier(0.45, 0, 0.25, 1) infinite;
       }
       &:nth-child(3) {
-        border-bottom-color: #722ed1;
-        animation: object-table-spin3 2.1s linear infinite;
+        inset: 20px;
+        background:
+          conic-gradient(from 240deg, transparent 0 14%, var(--loader-violet) 18% 40%, transparent 46% 100%),
+          conic-gradient(var(--loader-track), var(--loader-track));
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 4px));
+        animation: object-table-spin3 2s cubic-bezier(0.45, 0, 0.2, 1) infinite;
       }
     }
 
     .content-loader-text {
       position: absolute;
-      bottom: -32px;
+      bottom: -34px;
       font-size: 13px;
-      font-weight: 500;
-      letter-spacing: 2px;
+      font-weight: 600;
+      letter-spacing: 0;
       color: var(--ant-color-text-secondary);
     }
   }
@@ -903,13 +932,13 @@ export default defineComponent({
 }
 
 @keyframes object-table-spin1 {
-  to { transform: rotate(360deg); }
+  to { transform: rotate(1turn); }
 }
 @keyframes object-table-spin2 {
-  to { transform: rotate(-360deg); }
+  to { transform: rotate(-1turn); }
 }
 @keyframes object-table-spin3 {
-  to { transform: rotate(360deg); }
+  to { transform: rotate(1turn); }
 }
 @keyframes object-table-tag-pulse {
   0%, 100% { opacity: 1; }
