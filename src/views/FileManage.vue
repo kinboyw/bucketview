@@ -651,7 +651,9 @@ import {
   ExclamationCircleOutlined,
   HomeOutlined,
   SearchOutlined,
-  ShareAltOutlined,  FileTextOutlined,  CheckCircleFilled,
+  ShareAltOutlined,
+  FileTextOutlined,
+  CheckCircleFilled,
   CloseCircleFilled,
   ThunderboltOutlined,
   SettingOutlined,
@@ -754,7 +756,9 @@ export default defineComponent({
     FileOutlined,
     HomeOutlined,
     FolderOutlined,
-    SearchOutlined,    FileTextOutlined,    CheckCircleFilled,
+    SearchOutlined,
+    FileTextOutlined,
+    CheckCircleFilled,
     CloseCircleFilled,
     ThunderboltOutlined,
     ArrowUpOutlined,
@@ -1042,13 +1046,15 @@ export default defineComponent({
     const clampSidebarWidth = (width: number) => Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, width));
 
     const handleSidebarResizeMove = (e: MouseEvent) => {
-      sidebarWidth.value = clampSidebarWidth(sidebarResizeStartWidth + e.clientX - sidebarResizeStartX);
+      sidebarWidth.value = clampSidebarWidth(sidebarResizeStartWidth + e.clientX - sidebarResizeStartX);
+
     };
 
     const handleSidebarResizeEnd = () => {
       window.removeEventListener('mousemove', handleSidebarResizeMove);
       window.removeEventListener('mouseup', handleSidebarResizeEnd);
-      document.body.classList.remove('sidebar-resizing');
+      document.body.classList.remove('sidebar-resizing');
+
     };
 
     const handleSidebarResizeStart = (e: MouseEvent) => {
@@ -1152,7 +1158,8 @@ export default defineComponent({
 
     // connection 或 bucket/pathPrefix 变化时自动同步存储上下文
     watch([activeConnection, activeBucket, activePathPrefix], () => {
-      try { applyStorageContext(); } catch (e) { console.error('[STORAGE] watcher error:', e); }
+      try { applyStorageContext(); } catch (e) { console.error('[STORAGE] watcher error:', e); }
+
     }, { immediate: true });
 
     // connection 的 bucket/pathPrefix 变化时刷新列表视图
@@ -1638,7 +1645,8 @@ export default defineComponent({
       clampPreviewLayout();
       if (!internalOfficePreviewResizeEvent) {
         queueOfficePreviewRelayout(false, 80);
-      }
+      }
+
     };
 
     // 拖拽状态
@@ -1804,7 +1812,8 @@ export default defineComponent({
       window.addEventListener('resize', handleResize);
       window.addEventListener('click', handleClickOutside);
       window.addEventListener('mouseup', handleMouseButton);
-      window.addEventListener('keydown', handleGlobalKeydown);
+      window.addEventListener('keydown', handleGlobalKeydown);
+
 
       storage.on('upload', (data: any) => {
         handlerUploadCallback(data);
@@ -4137,7 +4146,8 @@ export default defineComponent({
       handleHotbarClick,
       handleCloseTab,
       showVirtualBucketCrumb,
-      isInVirtualBucketList,      activeBucket,
+      isInVirtualBucketList,
+      activeBucket,
       activePathPrefix,
       activeMountTargets,
       currentBucketMountStatus,
@@ -4148,13 +4158,15 @@ export default defineComponent({
       mountLoadingMap,
       scheduleVfsRefresh,
       vfsSyncState,
-      vfsFailedFiles,      handleShowLocalFile,
+      vfsFailedFiles,
+      handleShowLocalFile,
       handleLocalPreview,
       handleOpenLocalDirectory,
       activeConnectionColor,
       getConnectionColor,
       getConnectionTextColor,
-      getTabStyle,      handleTabChange,
+      getTabStyle,
+      handleTabChange,
       windowHeight,
       dragOverState,
       handleDragEnter,
@@ -4168,7 +4180,8 @@ export default defineComponent({
       handleBlankAreaContextMenu,
       handleSelectAll,
       handleInvertSelection,
-      hideContextMenu,      navPopupChain,
+      hideContextMenu,
+      navPopupChain,
       navPopupLoadingVisible,
       handleNavPopupHover,
       handleNavPopupLeave,
@@ -4182,7 +4195,9 @@ export default defineComponent({
       canGoForward,
       goBack,
       goForward,
-      tableState,      tableHasSelected,      handleFileTableRowSelect,
+      tableState,
+      tableHasSelected,
+      handleFileTableRowSelect,
       handleFileTableRowSelection,
                                                                                           configDrawerVisible,
       configFabHover,
@@ -4247,7 +4262,8 @@ export default defineComponent({
       breadcrumbDisplayNames,
       breadcrumbVisibleNames,
       breadcrumbExpandedIndex,
-      filteredSource,      handleUpload,
+      filteredSource,
+      handleUpload,
       handleUploadToDirectory,
       handleStorageListObjects,
       handleStorageCreateDirectory,
@@ -4937,19 +4953,41 @@ export default defineComponent({
         &.ant-btn-primary,
         &.upload-btn,
         &.download-btn {
-          background: var(--theme-color, #4f46e5);
-          border-color: var(--theme-color, #4f46e5);
-          color: var(--ant-color-bg-container);
+          background: var(--theme-color, #4f46e5) !important;
+          border-color: var(--theme-color, #4f46e5) !important;
+          color: #ffffff !important;
 
-          &:hover:not(:disabled) {
+          .anticon,
+          span,
+          > * {
+            color: #ffffff !important;
+          }
+
+          &:hover:not(:disabled),
+          &:focus:not(:disabled) {
             filter: brightness(0.92);
+            background: var(--theme-color, #4f46e5) !important;
+            border-color: var(--theme-color, #4f46e5) !important;
+            color: #ffffff !important;
+
+            .anticon,
+            span,
+            > * {
+              color: #ffffff !important;
+            }
           }
 
           &:disabled {
-            background: var(--ant-color-border);
-            border-color: var(--ant-color-border);
-            color: var(--ant-color-text-tertiary);
+            background: var(--ant-color-border) !important;
+            border-color: var(--ant-color-border) !important;
+            color: var(--ant-color-text-tertiary) !important;
             opacity: 1;
+
+            .anticon,
+            span,
+            > * {
+              color: var(--ant-color-text-tertiary) !important;
+            }
           }
         }
 
@@ -4986,8 +5024,10 @@ export default defineComponent({
       }
     }
 
-    .upload-btn {
+    .upload-btn,
+    .download-btn {
       font-weight: 500;
+      color: #ffffff !important;
     }
   }
 

@@ -264,7 +264,10 @@
             @click="handleConnectionColorGroupChange(group.id)"
           >
             <div class="color-group-card-head">
-              <span class="color-group-name">{{ group.name }}</span>
+              <div class="color-group-title">
+                <CheckCircleFilled v-if="colorGroupIdValue === group.id" class="color-group-check" />
+                <span class="color-group-name">{{ group.name }}</span>
+              </div>
               <span v-if="group.custom" class="color-group-tag">自定义</span>
             </div>
             <div class="color-group-strip">
@@ -691,6 +694,7 @@ import {
   HddOutlined,
   CaretDownOutlined,
   CaretRightOutlined,
+  CheckCircleFilled,
 } from '@ant-design/icons-vue';
 import { Connection, ConnectionColorGroup, MountTarget, PreloadStorage, PreloadNative, PreloadFuse, UpdaterResponse } from '../../electron/preload/types';
 import { FormInstance, notification } from 'ant-design-vue';
@@ -730,7 +734,7 @@ interface McImportItem {
 }
 
 export default defineComponent({
-  components: { PlusOutlined, ImportOutlined, DeleteOutlined, FormOutlined, FolderOpenOutlined, PlayCircleOutlined, CloseSquareOutlined, DownOutlined, RightOutlined, CloudServerOutlined, HddOutlined, CaretDownOutlined, CaretRightOutlined },
+  components: { PlusOutlined, ImportOutlined, DeleteOutlined, FormOutlined, FolderOpenOutlined, PlayCircleOutlined, CloseSquareOutlined, DownOutlined, RightOutlined, CloudServerOutlined, HddOutlined, CaretDownOutlined, CaretRightOutlined, CheckCircleFilled },
   props: {
     open: { type: Boolean, default: undefined },
     visible: { type: Boolean, default: false },
@@ -1628,36 +1632,77 @@ export default defineComponent({
   }
 }
 .right-side-drawer {
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+
+  .ant-drawer-content,
+  .ant-btn,
+  .ant-input,
+  .ant-input-number,
+  .ant-input-affix-wrapper,
+  .ant-select,
+  .ant-radio-button-wrapper {
+    font-family: inherit;
+  }
+
   .ant-drawer-content,
   .ant-drawer-wrapper-body {
     height: 100%;
     min-height: 0;
   }
 
-  .ant-drawer-content {
+  .ant-drawer-content,
+  .ant-drawer-wrapper-body {
     display: flex;
     flex-direction: column;
+  }
+
+  .ant-drawer-header,
+  .drawer-tabs {
+    flex: 0 0 auto;
   }
 
   .ant-drawer-body {
     display: flex;
     flex-direction: column;
     flex: 1;
+    height: 0;
     min-height: 0;
     overflow: hidden;
   }
 }
 
-.drawer-content { padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 0; background: transparent; flex: 1; min-height: 0; overflow: auto; }
-.drawer-content-settings {
-  flex: 1;
+.drawer-content {
+  height: 100%;
   min-height: 0;
-  gap: 12px;
-  padding-top: 12px;
+  padding: 4px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: transparent;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.drawer-content-settings {
+  display: block;
+  height: auto;
+  flex: 1 1 auto;
+  padding-top: 10px;
   padding-bottom: 24px;
+  overflow-y: auto;
+  overflow-x: hidden;
   background:
     linear-gradient(to bottom, var(--ant-color-bg-container), var(--ant-color-bg-layout));
   scrollbar-gutter: stable;
+
+  > .setting-section {
+    margin-bottom: 10px;
+  }
+
+  > .setting-section:last-child {
+    margin-bottom: 0;
+  }
 }
 .drawer-content-bucket { padding-bottom: 0; overflow: hidden; }
 .connection-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 0 8px; }
@@ -1892,12 +1937,30 @@ export default defineComponent({
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px 0 10px 98px; max-height: 360px; overflow-y: auto; padding-right: 2px;
   }
   .color-group-card {
-    border: 1px solid var(--ant-color-border-secondary); border-radius: 6px; padding: 7px; background: var(--ant-color-bg-container); cursor: pointer; transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    position: relative; border: 1px solid var(--ant-color-border-secondary); border-left: 2px solid transparent; border-radius: 6px; padding: 7px 7px 7px 8px; background: var(--ant-color-bg-container); cursor: pointer; transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
     &:hover { border-color: var(--ant-color-text-quaternary); background: var(--ant-color-fill-tertiary); }
-    &.color-group-card-active { border-color: var(--ant-color-primary); background: color-mix(in srgb, var(--ant-color-primary) 8%, var(--ant-color-bg-container)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ant-color-primary) 14%, transparent); }
+    &.color-group-card-active {
+      border-color: var(--ant-color-border-secondary);
+      border-left-color: var(--ant-color-primary);
+      background: var(--ant-color-bg-container);
+      box-shadow: none;
+      .color-group-name { color: var(--ant-color-text); }
+      &:hover {
+        border-color: var(--ant-color-border-secondary);
+        border-left-color: var(--ant-color-primary);
+        background: var(--ant-color-fill-tertiary);
+      }
+    }
+    &.color-group-card-active::after,
+    &.color-group-card-active::before {
+      content: none;
+      display: none;
+    }
   }
   .color-group-card-head {
     display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px;
+    .color-group-title { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1; }
+    .color-group-check { font-size: 12px; color: var(--ant-color-primary); flex-shrink: 0; }
     .color-group-name { font-size: 11px; font-weight: 600; color: var(--ant-color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .color-group-tag { font-size: 10px; color: var(--ant-color-text-tertiary); background: var(--ant-color-fill-tertiary); border-radius: 3px; padding: 1px 4px; flex-shrink: 0; }
   }
@@ -1930,15 +1993,15 @@ export default defineComponent({
   overflow: hidden;
 
   .setting-section-head {
-    padding: 10px 12px 9px;
+    padding: 9px 12px 8px;
     border-bottom: 1px solid var(--ant-color-border-secondary);
     background: var(--ant-color-fill-quaternary);
   }
 
   .setting-section-title {
-    font-size: 12px;
+    font-size: 13px;
     line-height: 18px;
-    font-weight: 600;
+    font-weight: 700;
     color: var(--ant-color-text);
   }
 
@@ -1950,7 +2013,7 @@ export default defineComponent({
   }
 
   .setting-field {
-    padding: 11px 12px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--ant-color-border-secondary);
 
     &:last-child {
@@ -1963,16 +2026,19 @@ export default defineComponent({
     display: grid;
     grid-template-columns: 92px minmax(0, 1fr);
     align-items: center;
-    column-gap: 12px;
+    column-gap: 10px;
   }
 
   .setting-field-inline .setting-desc {
     grid-column: 2;
+    grid-row: 2;
+    margin-top: 5px;
   }
 
   .setting-form-label {
     font-size: 12px;
     line-height: 24px;
+    font-weight: 500;
     color: var(--ant-color-text-secondary);
     white-space: nowrap;
   }
@@ -2003,14 +2069,20 @@ export default defineComponent({
   }
 
   .setting-desc {
-    margin: 6px 0 0 104px;
+    margin: 0;
     font-size: 11px;
-    line-height: 16px;
+    line-height: 17px;
     color: var(--ant-color-text-tertiary);
+    max-width: 360px;
+  }
+
+  .setting-field-main + .setting-desc {
+    margin-top: 6px;
+    margin-left: 102px;
   }
 
   .setting-sub-row {
-    margin: 0 12px 8px 104px;
+    margin: 0 12px 8px 102px;
     padding: 8px 10px;
     border: 1px solid var(--ant-color-border-secondary);
     border-radius: 6px;
@@ -2018,21 +2090,132 @@ export default defineComponent({
   }
 
   .color-group-row {
-    padding-bottom: 8px;
+    align-items: start;
+    padding-bottom: 10px;
   }
 
   .color-group-picker {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
-    margin: 0 12px 12px 116px;
-    max-height: 360px;
-    overflow-y: auto;
-    padding-right: 2px;
+    margin: 0 12px 12px 102px;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .color-group-card {
+    min-width: 0;
+    position: relative;
+    border: 1px solid var(--ant-color-border-secondary);
+    border-left: 2px solid transparent;
+    border-radius: 7px;
+    padding: 6px 6px 6px 8px;
+    background: var(--ant-color-bg-container);
+    cursor: pointer;
+    box-shadow: none;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+
+    &:hover {
+      border-color: var(--ant-color-text-quaternary);
+      background: var(--ant-color-fill-tertiary);
+      transform: none;
+    }
+
+    &.color-group-card-active {
+      border-color: var(--ant-color-border-secondary) !important;
+      border-left-color: var(--ant-color-primary) !important;
+      background: var(--ant-color-bg-container) !important;
+      box-shadow: none !important;
+      transform: none;
+
+      .color-group-card-head {
+        padding-right: 0;
+      }
+
+      .color-group-name {
+        color: var(--ant-color-text);
+        font-weight: 600;
+      }
+
+      .color-group-strip {
+        border-color: rgba(0, 0, 0, 0.08);
+        box-shadow: none;
+      }
+
+      &:hover {
+        border-color: var(--ant-color-border-secondary) !important;
+        border-left-color: var(--ant-color-primary) !important;
+        background: var(--ant-color-fill-tertiary) !important;
+      }
+    }
+
+    &.color-group-card-active::after,
+    &.color-group-card-active::before {
+      content: none !important;
+      display: none !important;
+    }
+  }
+
+  .color-group-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 4px;
+
+    .color-group-title {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .color-group-check {
+      font-size: 12px;
+      line-height: 1;
+      color: var(--ant-color-primary);
+      flex-shrink: 0;
+    }
+
+    .color-group-name {
+      font-size: 11px;
+      line-height: 15px;
+      font-weight: 600;
+      color: var(--ant-color-text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .color-group-tag {
+      font-size: 10px;
+      line-height: 14px;
+      color: var(--ant-color-text-tertiary);
+      background: var(--ant-color-fill-tertiary);
+      border-radius: 3px;
+      padding: 0 4px;
+      flex-shrink: 0;
+    }
+  }
+
+  .color-group-strip {
+    display: flex;
+    width: 100%;
+    height: 18px;
+    overflow: hidden;
+    border-radius: 5px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+
+    .color-strip-item {
+      flex: 1;
+      min-width: 0;
+    }
   }
 
   .color-group-editor {
-    margin: 0 12px 12px 116px;
+    margin: 0 12px 12px 102px;
     padding: 10px;
     border: 1px solid var(--ant-color-border-secondary);
     border-radius: 6px;
