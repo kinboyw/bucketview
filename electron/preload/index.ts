@@ -59,10 +59,11 @@ const deepLoopTraversal = async (
 };
 
 const minio = new S3Storage();
-const transferMinio = new S3Storage();
 
 const storages: { [key: string]: Storage } = { minio: minio };
-const transferStorages: { [key: string]: Storage } = { minio: transferMinio };
+// Transfer jobs must not share mutable connection/target state with each other.
+// Each worker receives a fresh storage instance for its immutable job context.
+const transferStorages: { [key: string]: () => Storage } = { minio: () => new S3Storage() };
 const eventBus = new EventEmitter();
 const transfer = new Transfer(transferStorages, eventBus);
 
@@ -70,14 +71,23 @@ const getOptionString = (value: any, fallback: string = '') => typeof value === 
 
 const createTransferJob = (key: string, storage: Storage, options: TransferObjectOption) => {
   const connection = options.connection || storage.connection;
+  const persistedConnection = connection ? {
+    ...connection,
+    accessKeySecret: encryptSecretValue(connection.accessKeySecret || ''),
+  } : connection;
+  const record = { ...(options as any) };
+  // The durable job keeps the encrypted connection at the job level. The UI
+  // record can rehydrate its plaintext connection by connectionId when needed.
+  delete record.connection;
   return {
     key,
     uid: options.uid,
     prefix: options.prefix,
     objectName: options.objectName,
     localPath: options.localPath,
+    partialPath: options.partialPath,
     name: options.name,
-    connection,
+    connection: persistedConnection,
     connectionId: options.connectionId || connection?.id || '',
     bucket: getOptionString(options.bucket, storage.bucket),
     pathPrefix: getOptionString(options.pathPrefix, storage.pathPrefix),
@@ -85,7 +95,7 @@ const createTransferJob = (key: string, storage: Storage, options: TransferObjec
     totalBytes: options.totalBytes,
     forceOverwrite: options.forceOverwrite,
     resumeFrom: options.resumeFrom,
-    record: options,
+    record,
   };
 };
 
@@ -393,6 +403,25 @@ contextBridge.exposeInMainWorld('fuse', {
   checkMount(mountpoint: string | undefined, retry: number = 1): Promise<boolean> {
     return Fuse.checkMount(mountpoint, retry);
   },
+  availableDriveLetters(): string[] {
+    if (nodeOs.platform() !== 'win32') return [];
+    const drives: string[] = [];
+    for (let code = 65; code <= 90; code++) {
+      const drive = `${String.fromCharCode(code)}:`;
+      try {
+        if (!fse.existsSync(`${drive}\\`)) drives.push(drive);
+      } catch {}
+    }
+    return drives;
+  },
+
+  getMountStatus(mountTarget: MountTarget) {
+    return Fuse.getMountStatus(mountTarget);
+  },
+
+  syncAutoMount(connection: Connection, mountTarget: MountTarget): Promise<void> {
+    return Fuse.syncAutoMount(connection, mountTarget);
+  },
 
   driveList(): Promise<string[]> {
     return Fuse.driveList();
@@ -406,8 +435,8 @@ contextBridge.exposeInMainWorld('fuse', {
     return Fuse.mount(connection, mountTarget, fuseBin);
   },
 
-  umount(connection: Connection, mountTarget: MountTarget): Promise<FuseUmountResponse> {
-    return Fuse.umount(connection, mountTarget);
+  umount(connection: Connection, mountTarget: MountTarget, options?: { forgetAutoMount?: boolean }): Promise<FuseUmountResponse> {
+    return Fuse.umount(connection, mountTarget, options);
   },
 
   vfsRefresh(targetId: string, dir: string): Promise<void> {

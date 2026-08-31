@@ -91,6 +91,8 @@ export interface MountTarget {
   mountPoint?: string;
   cacheDirectory?: string;
   enabled?: boolean;
+  /** 是否在应用以开机启动模式运行时自动挂载 */
+  autoMount?: boolean;
 }
 
 export interface Storage {
@@ -170,6 +172,7 @@ export interface PreloadNative {
   showLocalFile: (path: string) => void;
   pathJoin: (...parts: string[]) => string;
   localFileSize: (path: string) => number | null;
+  availableDriveLetters: () => string[];
   resolveUniquePath: (localPath: string) => string;
   fuseBin: () => string;
   ensureRclone: (preferredPath?: string) => Promise<{ success: boolean; path?: string; message?: string; source?: string }>;
@@ -245,6 +248,8 @@ export type StorageOptions = StorageOption[];
 export interface TransferObjectOption {
   objectName: string;
   localPath: string;
+  /** Download staging path used for safe resume and atomic finalization. */
+  partialPath?: string;
   [key: string]: any;
 }
 
@@ -357,8 +362,6 @@ export interface HeadObjectResponse {
 export interface Setting {
   appVersion: string;
   fuseBin: string;
-  flashUploadEnabled?: boolean;
-  flashUploadThresholdMB?: number;
   defaultCacheDirectory?: string;
   defaultPageSize?: number;
   defaultDownloadDirectory?: string;
@@ -386,6 +389,17 @@ export interface FuseMountResponse {
 
 export type FuseUmountResponse = FuseMountResponse;
 
+export type FuseMountStatus = 'mounted' | 'unmounted' | 'mounting' | 'unmounting' | 'error';
+
+export interface FuseMountStatusResponse {
+  targetId: string;
+  status: FuseMountStatus;
+  mountPoint?: string;
+  pid?: number;
+  rcPort?: number;
+  desc?: string;
+}
+
 export interface VfsRefreshVerifiedResult {
   verified: boolean;
   retries: number;
@@ -397,10 +411,12 @@ export interface VfsRefreshVerifiedResult {
 
 export interface PreloadFuse {
   checkMount: (mountpoint: string | undefined, retry?: number) => Promise<boolean>;
+  getMountStatus: (mountTarget: MountTarget) => Promise<FuseMountStatusResponse>;
+  syncAutoMount: (connection: Connection, mountTarget: MountTarget) => Promise<void>;
   driveList: () => Promise<string[]>;
   preMountCleanup: (mountTarget: MountTarget) => Promise<void>;
   mount: (connection: Connection, mountTarget: MountTarget, fuseBin: string) => Promise<FuseMountResponse>;
-  umount: (connection: Connection, mountTarget: MountTarget) => Promise<FuseUmountResponse>;
+  umount: (connection: Connection, mountTarget: MountTarget, options?: { forgetAutoMount?: boolean }) => Promise<FuseUmountResponse>;
   vfsRefresh: (targetId: string, dir: string) => Promise<void>;
   vfsForget: (targetId: string, file: string) => Promise<void>;
   vfsForgetDir: (targetId: string, dir: string) => Promise<void>;

@@ -15,6 +15,7 @@ export interface TransferInfo {
   name: string;
   objectName: string;
   localPath: string;
+  partialPath?: string;
   prefix?: string;
   bucket?: string;
   pathPrefix?: string;
@@ -107,11 +108,8 @@ export const useTransferStore = defineStore('transfer', {
           const records = storage.listTransferRecords(offset, PAGE_SIZE) || [];
           for (const r of records) {
             if (r && r.uid) {
-              // Interrupted in-flight jobs are recovered separately from the active queue.
-              if (r.status === 'running' || r.status === 'waiting') {
-                r.status = 'error';
-                r.errorDesc = '传输中断（应用退出）';
-              }
+              // Jobs still present in the durable queue are resumed by the
+              // preload scheduler. Keep their state until a terminal event.
               this.queue[r.uid] = r;
             }
           }

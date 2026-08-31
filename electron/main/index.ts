@@ -295,7 +295,6 @@ const cleanup = () => {
     tray = null
   }
 }
-app.on('before-quit', cleanup)
 process.on('exit', cleanup)
 process.on('SIGINT', () => { cleanup(); process.exit(0) })
 process.on('SIGTERM', () => { cleanup(); process.exit(0) })
@@ -529,11 +528,9 @@ app.whenReady().then(async () => {
   if (!gotTheLock) return;
 
   const loginItemSettings = app.getLoginItemSettings();
-  const shouldOpenWindow = Platform.windows()
-    ? process.argv.indexOf("--openAsHidden") < 0
-    : Platform.macos()
-      ? !loginItemSettings.wasOpenedAsHidden
-      : true;
+  const startedHidden = process.argv.includes('--openAsHidden') ||
+    (Platform.macos() && loginItemSettings.wasOpenedAsHidden);
+  const shouldOpenWindow = !startedHidden;
 
   if (shouldOpenWindow) {
     await createWindow();
@@ -679,16 +676,40 @@ app.whenReady().then(async () => {
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const { connection, mountTarget } = targets[key];
+    if (!connection || !mountTarget) continue;
     const resp = await Fuse.mount(connection, mountTarget, fuseBinPath);
     if (!resp.success) {
-      // TODO: 记录日志
+      logger.warn('mount', 'auto-mount failed', { targetId: key, message: resp.desc || 'unknown error' });
     }
   }
 })
 
-app.on('before-quit', () => {
+let shutdownStarted = false;
+app.on('before-quit', (event) => {
   // 系统退出、托盘退出和更新安装属于真正退出，不再触发标题栏关闭策略。
   forceQuit = true;
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  event.preventDefault();
+  cleanup();
+  void (async () => {
+    const shutdownStore = new Store();
+    const runtimeTargets = shutdownStore.get('app.runtime.mounts', {}) as { [key: string]: { connection: Connection; mountTarget: MountTarget } };
+    const autoTargets = shutdownStore.get('app.openAtLogin.targets', {}) as { [key: string]: { connection: Connection; mountTarget: MountTarget } };
+    const targets = new Map<string, { connection: Connection; mountTarget: MountTarget }>();
+    for (const entry of [...Object.values(runtimeTargets), ...Object.values(autoTargets)]) {
+      if (entry?.mountTarget?.id && entry.connection) targets.set(entry.mountTarget.id, entry);
+    }
+    for (const { connection, mountTarget } of targets.values()) {
+      if (!connection || !mountTarget) continue;
+      try {
+        await Fuse.umount(connection, mountTarget);
+      } catch (error: any) {
+        logger.warn('mount', 'shutdown unmount failed', { targetId: mountTarget.id, message: error?.message || String(error) });
+      }
+    }
+    app.exit(0);
+  })();
 });
 
 app.on('window-all-closed', () => {

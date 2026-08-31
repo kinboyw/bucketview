@@ -386,7 +386,7 @@ function init() {
   window.addEventListener("resize", onResize, false);
   // stats
   if (showFps) {
-    stats = Stats();
+    stats = new Stats();
     el.appendChild(stats.dom);
   }
   animate();

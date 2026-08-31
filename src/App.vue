@@ -52,7 +52,7 @@
               <span>{{ updaterState.status === 'checking' ? '检查中...' : '检查更新' }}</span>
             </button>
             <button
-              v-if="updaterState.status === 'downloaded'"
+              v-if="updaterState.status === 'downloaded' || updaterState.status === 'installing'"
               type="button"
               class="about-action-btn about-action-btn-primary"
               :class="{ 'is-loading': updaterState.status === 'installing' }"

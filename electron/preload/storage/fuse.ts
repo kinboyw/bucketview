@@ -3,12 +3,16 @@ import nodeFs from "node:fs";
 import nodePath from "node:path";
 import nodeProcess from "child_process";
 import nodeHttp from "node:http";
-import { Connection, MountTarget, FuseMountResponse, FuseUmountResponse, VfsRefreshVerifiedResult } from "../types";
+import nodeNet from "node:net";
+import nodeCrypto from "node:crypto";
+import { Connection, MountTarget, FuseMountResponse, FuseUmountResponse, FuseMountStatus, FuseMountStatusResponse, VfsRefreshVerifiedResult } from "../types";
 import { getDriveList } from "../drivelist";
 import { Platform, sleep } from "../../common";
 import Store from "electron-store";
+import { decryptConnectionSecrets, encryptConnectionSecrets } from "../../common/secret-crypto";
 
 const store = new Store();
+const activeMountKey = (targetId: string) => `app.runtime.mounts.${targetId}`;
 
 const configDir = nodePath.join(nodePath.dirname(store.path), "bucketview");
 
@@ -21,22 +25,45 @@ const scrubMountConfigSecrets = (mountConfigFile: string) => {
   } catch {}
 };
 
-// 根据 target id 生成 rc 端口号 (5570-5599)
-function getRcPort(targetId: string): number {
-  let hash = 0;
-  for (let i = 0; i < targetId.length; i++) {
-    hash = ((hash << 5) - hash) + targetId.charCodeAt(i);
-    hash |= 0;
-  }
-  return 5570 + (Math.abs(hash) % 30);
+/** Runtime filenames must not be derived directly from user-controlled target ids. */
+function targetRuntimeStem(targetId: string): string {
+  return nodeCrypto.createHash('sha256').update(targetId).digest('hex').slice(0, 32);
+}
+
+function runtimeFilePath(targetId: string, suffix: string): string {
+  return nodePath.join(configDir, `${targetRuntimeStem(targetId)}.${suffix}`);
+}
+
+function legacyRuntimeFilePath(targetId: string, suffix: string): string {
+  return nodePath.join(configDir, `${targetId}.${suffix}`);
+}
+
+function resolveRuntimeFile(targetId: string, suffix: string): string {
+  const current = runtimeFilePath(targetId, suffix);
+  if (nodeFs.existsSync(current)) return current;
+  return legacyRuntimeFilePath(targetId, suffix);
+}
+
+async function allocateRcPort(): Promise<number> {
+  const server = nodeNet.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (!port) throw new Error('无法分配 rclone RC 端口');
+  return port;
 }
 
 /** 从 .rc 文件读取实际 rc 端口，若文件不存在则用 hash 计算 */
 function readRcPort(targetId: string): number | null {
-  const mountConfigRcFile = nodePath.join(configDir, targetId + ".rc");
+  const mountConfigRcFile = resolveRuntimeFile(targetId, 'rc');
   try {
     const port = nodeFs.readFileSync(mountConfigRcFile).toString().trim();
-    if (port.length > 0) return Number(port);
+    const parsed = Number(port);
+    if (Number.isInteger(parsed) && parsed > 0 && parsed < 65536) return parsed;
   } catch {}
   return null;
 }
@@ -205,34 +232,100 @@ async function notifyExplorerRefreshAndCleanup(
   }
 }
 
-/** 从 pid 文件读取并终止残留 rclone 进程 */
-function killStaleProcess(mountTargetId: string): void {
-  const mountConfigPidFile = nodePath.join(configDir, mountTargetId + ".pid");
+function readPid(targetId: string): number | null {
   try {
-    const pid = nodeFs.readFileSync(mountConfigPidFile).toString().trim();
-    if (pid.length > 0) {
-      try {
-        if (Platform.windows()) {
-          nodeProcess.execSync(`taskkill /pid ${pid} /f /t`, { windowsHide: true, timeout: 3000 });
-        } else {
-          process.kill(Number(pid), 'SIGKILL');
-        }
-      } catch { /* 进程可能已退出 */ }
+    const raw = nodeFs.readFileSync(resolveRuntimeFile(targetId, 'pid')).toString().trim();
+    const pid = Number(raw);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function processCommand(pid: number): string {
+  try {
+    if (Platform.windows()) {
+      const result = nodeProcess.execFileSync('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        `(Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\").CommandLine`,
+      ], { windowsHide: true, timeout: 3000, encoding: 'utf8' });
+      return String(result || '').trim();
     }
-  } catch { /* pid 文件不存在 */ }
-  try { nodeFs.unlinkSync(mountConfigPidFile); } catch {}
+    return String(nodeProcess.execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
+      timeout: 3000, encoding: 'utf8',
+    }) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function isManagedRcloneProcess(pid: number, rcPort: number | null): boolean {
+  const command = processCommand(pid).toLowerCase();
+  if (!command || !command.includes('rclone') || !command.includes(' mount')) return false;
+  return !rcPort || command.includes(`--rc-addr=localhost:${rcPort}`) || command.includes(`--rc-addr=127.0.0.1:${rcPort}`);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasLiveUnverifiedProcess(targetId: string): boolean {
+  const pid = readPid(targetId);
+  return !!pid && isProcessAlive(pid) && !isManagedRcloneProcess(pid, readRcPort(targetId));
+}
+
+function normalizedMountPath(mountPoint: string): string {
+  if (Platform.windows() && /^[A-Za-z]:$/.test(mountPoint.trim())) return mountPoint.trim() + '\\';
+  return mountPoint;
+}
+
+function isMountPointAccessible(mountPoint: string): boolean {
+  try {
+    const root = normalizedMountPath(mountPoint);
+    nodeFs.accessSync(root);
+    nodeFs.readdirSync(root);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 从 pid 文件读取并终止属于当前 target 的 rclone 进程。 */
+function killStaleProcess(mountTargetId: string): void {
+  const mountConfigPidFile = resolveRuntimeFile(mountTargetId, 'pid');
+  const pid = readPid(mountTargetId);
+  const rcPort = readRcPort(mountTargetId);
+  if (pid && isManagedRcloneProcess(pid, rcPort)) {
+    try {
+      if (Platform.windows()) {
+        nodeProcess.execFileSync('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true, timeout: 3000 });
+      } else {
+        process.kill(pid, 'SIGKILL');
+      }
+    } catch { /* 进程可能已退出 */ }
+    try { nodeFs.unlinkSync(mountConfigPidFile); } catch {}
+  } else if (pid && isProcessAlive(pid)) {
+    console.warn(`[MOUNT] skip killing unverified pid ${pid} for target ${mountTargetId}`);
+    return;
+  } else {
+    try { nodeFs.unlinkSync(mountConfigPidFile); } catch {}
+  }
 }
 
 /** 通过 rc 端口优雅退出 rclone 进程 */
 async function quitViaRc(mountTargetId: string): Promise<void> {
-  const mountConfigRcFile = nodePath.join(configDir, mountTargetId + ".rc");
   try {
-    const rcPort = nodeFs.readFileSync(mountConfigRcFile).toString().trim();
-    if (rcPort.length > 0) {
+    const rcPort = readRcPort(mountTargetId);
+    if (rcPort) {
       const fuseBin = store.get("app.openAtLogin.fuseBin") as string || "";
       if (fuseBin) {
         await new Promise<void>((resolve) => {
-          const proc = nodeProcess.spawn(fuseBin, ["rc", "core/quit", `--rc-addr=localhost:${rcPort}`], { windowsHide: true });
+          const proc = nodeProcess.spawn(fuseBin, ["rc", "core/quit", `--rc-addr=localhost:${rcPort}`], { windowsHide: true, stdio: 'ignore' });
           proc.on('exit', () => resolve());
           proc.on('error', () => resolve());
           setTimeout(resolve, 3000);
@@ -248,11 +341,15 @@ async function cleanupGhostDrive(mountPoint: string): Promise<void> {
   if (!Platform.windows() || !mountPoint) return;
   const drives = await Fuse.driveList();
   if (!drives.includes(mountPoint)) return;
-  try {
-    nodeFs.accessSync(mountPoint);
-    // 盘符可访问，不是幽灵
-  } catch {
+  if (!isMountPointAccessible(mountPoint)) {
     // 盘符存在但不可访问，是幽灵盘符
+    try {
+      const fuseBin = store.get("app.openAtLogin.fuseBin") as string || "";
+      if (fuseBin) {
+        nodeProcess.execFileSync(fuseBin, ["unmount", mountPoint], { windowsHide: true, timeout: 5000, stdio: 'ignore' });
+        await sleep(500);
+      }
+    } catch {}
     try {
       nodeProcess.execSync(`net use ${mountPoint} /delete /y`, { windowsHide: true, timeout: 3000 });
       await sleep(500);
@@ -261,6 +358,68 @@ async function cleanupGhostDrive(mountPoint: string): Promise<void> {
 }
 
 export class Fuse {
+  private static readonly targetLocks = new Map<string, Promise<void>>();
+  private static readonly runtimeStatus = new Map<string, { status: FuseMountStatus; desc?: string }>();
+
+  private static async withTargetLock<T>(targetId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = Fuse.targetLocks.get(targetId) || Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const queued = previous.then(() => gate);
+    Fuse.targetLocks.set(targetId, queued);
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (Fuse.targetLocks.get(targetId) === queued) Fuse.targetLocks.delete(targetId);
+    }
+  }
+
+  private static setRuntimeStatus(targetId: string, status: FuseMountStatus, desc?: string): void {
+    Fuse.runtimeStatus.set(targetId, { status, desc });
+  }
+
+  private static async rcAlive(targetId: string): Promise<boolean> {
+    const rcPort = readRcPort(targetId);
+    if (!rcPort) return false;
+    const resp = await rcPost(rcPort, 'core/version', {});
+    return resp.status === 200;
+  }
+
+  private static async isManagedMount(target: MountTarget): Promise<boolean> {
+    const rcPort = readRcPort(target.id);
+    const pid = readPid(target.id);
+    if (!rcPort || !pid || !isProcessAlive(pid)) return false;
+    if (!await Fuse.checkMount(target.mountPoint, 1)) return false;
+    return Fuse.rcAlive(target.id);
+  }
+
+  public static async getMountStatus(mountTarget: MountTarget): Promise<FuseMountStatusResponse> {
+    const runtime = Fuse.runtimeStatus.get(mountTarget.id);
+    const pid = readPid(mountTarget.id) || undefined;
+    const rcPort = readRcPort(mountTarget.id) || undefined;
+    if (runtime?.status === 'mounting' || runtime?.status === 'unmounting') {
+      return { targetId: mountTarget.id, status: runtime.status, mountPoint: mountTarget.mountPoint, pid, rcPort, desc: runtime.desc };
+    }
+    if (await Fuse.isManagedMount(mountTarget)) {
+      Fuse.setRuntimeStatus(mountTarget.id, 'mounted');
+      return { targetId: mountTarget.id, status: 'mounted', mountPoint: mountTarget.mountPoint, pid, rcPort };
+    }
+    if (hasLiveUnverifiedProcess(mountTarget.id)) {
+      const desc = '挂载进程仍在运行，但无法确认其归属，请检查后再操作';
+      Fuse.setRuntimeStatus(mountTarget.id, 'error', desc);
+      return { targetId: mountTarget.id, status: 'error', mountPoint: mountTarget.mountPoint, pid, rcPort, desc };
+    }
+    const stale = !!pid || !!rcPort;
+    if (stale && mountTarget.mountPoint && await Fuse.checkMount(mountTarget.mountPoint, 1)) {
+      const desc = '挂载进程或控制端点不可用';
+      Fuse.setRuntimeStatus(mountTarget.id, 'error', desc);
+      return { targetId: mountTarget.id, status: 'error', mountPoint: mountTarget.mountPoint, pid, rcPort, desc };
+    }
+    Fuse.setRuntimeStatus(mountTarget.id, 'unmounted');
+    return { targetId: mountTarget.id, status: 'unmounted', mountPoint: mountTarget.mountPoint, pid, rcPort };
+  }
   public static async checkMount(mountPoint: string | undefined, retry: number = 1): Promise<boolean> {
     if (!mountPoint) return false;
     if (retry < 1) retry = 1;
@@ -272,13 +431,9 @@ export class Fuse {
         if (i < retry) { await sleep(1000); continue; }
         return false;
       }
-      try {
-        nodeFs.accessSync(mountPoint);
-        return true;
-      } catch {
-        if (i < retry) { await sleep(1000); continue; }
-        return false;
-      }
+      if (isMountPointAccessible(mountPoint)) return true;
+      if (i < retry) { await sleep(1000); continue; }
+      return false;
     }
     return false;
   }
@@ -289,48 +444,72 @@ export class Fuse {
   }
 
   /** 挂载前清理：终止残留进程 + 清理幽灵盘符 */
-  public static async preMountCleanup(mountTarget: MountTarget): Promise<void> {
+  private static async cleanupBeforeMount(mountTarget: MountTarget): Promise<void> {
     // 1. 通过 rc 优雅退出旧进程
     await quitViaRc(mountTarget.id);
     // 2. 强制终止残留 pid
     killStaleProcess(mountTarget.id);
     // 3. 清理 rc 文件
-    try { nodeFs.unlinkSync(nodePath.join(configDir, mountTarget.id + ".rc")); } catch {}
+    try { nodeFs.unlinkSync(resolveRuntimeFile(mountTarget.id, 'rc')); } catch {}
     // 4. 清理目标盘符的幽灵盘符
     await cleanupGhostDrive(mountTarget.mountPoint || '');
     // 5. 等待清理生效
     await sleep(500);
   }
 
-  public static async mount(connection: Connection, mountTarget: MountTarget, fuseBin: string): Promise<FuseMountResponse> {
-    if (!store.has(`app.openAtLogin.targets.${mountTarget.id}`)) {
-      store.set(`app.openAtLogin.targets.${mountTarget.id}`, { connection, mountTarget });
-      store.set("app.openAtLogin.fuseBin", fuseBin);
+  public static async preMountCleanup(mountTarget: MountTarget): Promise<void> {
+    await Fuse.withTargetLock(mountTarget.id, () => Fuse.cleanupBeforeMount(mountTarget));
+  }
+
+  public static async syncAutoMount(connection: Connection, mountTarget: MountTarget): Promise<void> {
+    const key = `app.openAtLogin.targets.${mountTarget.id}`;
+    if (mountTarget.autoMount === true) {
+      store.set(key, { connection: encryptConnectionSecrets(decryptConnectionSecrets(connection)), mountTarget });
+    } else {
+      store.delete(key);
     }
+  }
 
-    // 挂载前清理残留状态
-    await Fuse.preMountCleanup(mountTarget);
+  public static async mount(connection: Connection, mountTarget: MountTarget, fuseBin: string): Promise<FuseMountResponse> {
+    return Fuse.withTargetLock(mountTarget.id, () => Fuse.mountInternal(connection, mountTarget, fuseBin));
+  }
 
-    const mountState = await Fuse.checkMount(mountTarget.mountPoint);
-    if (mountState) {
+  private static async mountInternal(connection: Connection, mountTarget: MountTarget, fuseBin: string): Promise<FuseMountResponse> {
+    if (await Fuse.isManagedMount(mountTarget)) {
+      const resolvedConnection = decryptConnectionSecrets(connection);
+      store.set(activeMountKey(mountTarget.id), {
+        connection: encryptConnectionSecrets(resolvedConnection),
+        mountTarget,
+      });
+      Fuse.setRuntimeStatus(mountTarget.id, 'mounted');
       return { success: true };
     }
+    if (hasLiveUnverifiedProcess(mountTarget.id)) {
+      const desc = '挂载进程仍在运行，但无法确认其归属，请先人工检查';
+      Fuse.setRuntimeStatus(mountTarget.id, 'error', desc);
+      return { success: false, desc };
+    }
 
-    const mountConfig = Fuse.getMountConfig(connection);
-    const mountConfigFile = nodePath.join(configDir, mountTarget.id);
-    const mountConfigLogFile = mountConfigFile + ".log"
-    const mountConfigPidFile = mountConfigFile + ".pid"
-    const mountConfigRcFile = mountConfigFile + ".rc"
+    Fuse.setRuntimeStatus(mountTarget.id, 'mounting');
+
+    // 挂载前清理残留状态
+    await Fuse.cleanupBeforeMount(mountTarget);
+
+    const resolvedConnection = decryptConnectionSecrets(connection);
+    const mountConfigFile = runtimeFilePath(mountTarget.id, 'conf');
+    const mountConfigLogFile = runtimeFilePath(mountTarget.id, 'log');
+    const mountConfigPidFile = runtimeFilePath(mountTarget.id, 'pid');
+    const mountConfigRcFile = runtimeFilePath(mountTarget.id, 'rc');
 
     // rclone 远程路径: BucketView_{connectionId}:{bucket}/{pathPrefix}
     const remotePath = mountTarget.pathPrefix
-      ? `BucketView_${connection.id}:${mountTarget.bucket}/${mountTarget.pathPrefix}`
-      : `BucketView_${connection.id}:${mountTarget.bucket}`;
+      ? `BucketView_${resolvedConnection.id}:${mountTarget.bucket}/${mountTarget.pathPrefix}`
+      : `BucketView_${resolvedConnection.id}:${mountTarget.bucket}`;
 
     try {
       nodeFs.mkdirSync(configDir, { recursive: true });
       nodeFs.mkdirSync(nodePath.dirname(mountConfigFile), { recursive: true });
-      nodeFs.writeFileSync(mountConfigFile, mountConfig);
+      nodeFs.writeFileSync(mountConfigFile, Fuse.getMountConfig(resolvedConnection), { mode: 0o600 });
       try { nodeFs.unlinkSync(mountConfigLogFile); } catch {}
 
       if (fuseBin.length == 0) {
@@ -341,6 +520,18 @@ export class Fuse {
       if (!mountTarget.mountPoint || mountTarget.mountPoint.trim().length === 0) {
         scrubMountConfigSecrets(mountConfigFile);
         return { success: false, desc: "请指定挂载盘符/路径" }
+      }
+      if (Platform.windows() && !/^[A-Za-z]:$/.test(mountTarget.mountPoint.trim())) {
+        scrubMountConfigSecrets(mountConfigFile);
+        return { success: false, desc: "Windows 挂载点必须是盘符，例如 M:" };
+      }
+      if (!Platform.windows() && !nodePath.isAbsolute(mountTarget.mountPoint)) {
+        scrubMountConfigSecrets(mountConfigFile);
+        return { success: false, desc: "挂载点必须是绝对路径，例如 /mnt/bucket" };
+      }
+
+      if (!Platform.windows()) {
+        nodeFs.mkdirSync(mountTarget.mountPoint, { recursive: true });
       }
 
       // 检查盘符是否已被占用
@@ -355,14 +546,14 @@ export class Fuse {
         return { success: false, desc: `盘符 ${mountTarget.mountPoint} 已被占用` };
       }
 
+      const rcPort = await allocateRcPort();
       const resp = await new Promise<FuseMountResponse>((resolve, reject) => {
-        const rcPort = getRcPort(mountTarget.id);
         // volname: connection/bucket[/pathPrefix]，bucket 过长截断
         const truncateBucket = (name: string, maxLen: number = 16): string =>
           name.length <= maxLen ? name : name.substring(0, maxLen) + '…';
-        const volnameParts = [connection.id, truncateBucket(mountTarget.bucket)];
+        const volnameParts = [resolvedConnection.id, truncateBucket(mountTarget.bucket)];
         if (mountTarget.pathPrefix) volnameParts.push(mountTarget.pathPrefix);
-        const volname = volnameParts.join('/');
+        const volname = volnameParts.join(' - ').replace(/[\\/:*?"<>|]/g, '_');
         const args = ["mount", remotePath, mountTarget.mountPoint,
           "--log-file", mountConfigLogFile, "--log-level", "DEBUG",
           "--config", mountConfigFile, "--s3-chunk-size", "128M",
@@ -370,6 +561,7 @@ export class Fuse {
           "--low-level-retries", "3", "--s3-upload-concurrency", "10", "--s3-list-version", "2",
           "--volname", volname, "--dir-cache-time", "10m",
           "--rc", "--rc-no-auth", `--rc-addr=localhost:${rcPort}`];
+        if (Platform.windows()) args.push("--network-mode");
         if (!Platform.windows()) {
           args.push("--allow-other")
         }
@@ -392,10 +584,25 @@ export class Fuse {
           nodeFs.writeFileSync(mountConfigRcFile, rcPort.toString());
           resolve({ success: true });
         })
+        subprocess.once('exit', (code, signal) => {
+          const current = Fuse.runtimeStatus.get(mountTarget.id);
+          if (current?.status === 'mounted' || current?.status === 'mounting') {
+            Fuse.setRuntimeStatus(mountTarget.id, 'error', `rclone 已退出（code=${code ?? 'null'}, signal=${signal ?? 'null'}）`);
+            store.delete(activeMountKey(mountTarget.id));
+            for (const suffix of ['pid', 'rc']) { try { nodeFs.unlinkSync(runtimeFilePath(mountTarget.id, suffix)); } catch {} }
+          }
+        });
         subprocess.unref();
       });
 
-      const mountState = await Fuse.checkMount(mountTarget.mountPoint, 60);
+      let mountState = false;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        if (await Fuse.isManagedMount(mountTarget)) {
+          mountState = true;
+          break;
+        }
+        await sleep(1000);
+      }
       if (!mountState) {
         // 读取 rclone 日志获取详细错误信息
         let logDetail = '';
@@ -414,10 +621,23 @@ export class Fuse {
         try { nodeFs.unlinkSync(mountConfigLogFile); } catch {}
         try { nodeFs.unlinkSync(mountConfigRcFile); } catch {}
         scrubMountConfigSecrets(mountConfigFile);
-        const desc = logDetail || "挂载异常：盘符不可访问";
+        const desc = logDetail || "挂载异常：挂载点或 rclone 控制端点不可用";
+        Fuse.setRuntimeStatus(mountTarget.id, 'error', desc);
         return { success: false, desc };
       }
 
+      store.set('app.openAtLogin.fuseBin', fuseBin);
+      store.set(activeMountKey(mountTarget.id), {
+        connection: encryptConnectionSecrets(resolvedConnection),
+        mountTarget,
+      });
+      const autoKey = `app.openAtLogin.targets.${mountTarget.id}`;
+      if (mountTarget.autoMount === true || (mountTarget.autoMount === undefined && store.has(autoKey))) {
+        store.set(autoKey, { connection: encryptConnectionSecrets(resolvedConnection), mountTarget });
+      } else if (mountTarget.autoMount === false && store.has(autoKey)) {
+        store.delete(autoKey);
+      }
+      Fuse.setRuntimeStatus(mountTarget.id, 'mounted');
       return resp;
 
     } catch (error) {
@@ -425,65 +645,67 @@ export class Fuse {
       killStaleProcess(mountTarget.id);
       await cleanupGhostDrive(mountTarget.mountPoint || '');
       scrubMountConfigSecrets(mountConfigFile);
-      return { success: false, desc: error.message };
+      const desc = error?.message || String(error);
+      Fuse.setRuntimeStatus(mountTarget.id, 'error', desc);
+      return { success: false, desc };
     }
   }
 
-  public static async umount(connection: Connection, mountTarget: MountTarget): Promise<FuseUmountResponse> {
-    if (store.has(`app.openAtLogin.targets.${mountTarget.id}`)) {
-      store.delete(`app.openAtLogin.targets.${mountTarget.id}`);
-    }
-    const mountConfigPidFile = nodePath.join(configDir, mountTarget.id + ".pid");
-    const mountConfigRcFile = nodePath.join(configDir, mountTarget.id + ".rc");
+  public static async umount(connection: Connection, mountTarget: MountTarget, options: { forgetAutoMount?: boolean } = {}): Promise<FuseUmountResponse> {
+    return Fuse.withTargetLock(mountTarget.id, () => Fuse.umountInternal(connection, mountTarget, options));
+  }
 
+  private static async umountInternal(connection: Connection, mountTarget: MountTarget, options: { forgetAutoMount?: boolean } = {}): Promise<FuseUmountResponse> {
+    Fuse.setRuntimeStatus(mountTarget.id, 'unmounting');
     try {
-      // 通过 rclone rc 优雅退出
       await quitViaRc(mountTarget.id);
       await sleep(1000);
-
-      // 验证是否已卸载
-      const mountState = await Fuse.checkMount(mountTarget.mountPoint);
-      if (!mountState) {
-        try { nodeFs.unlinkSync(mountConfigPidFile); } catch {}
-        try { nodeFs.unlinkSync(mountConfigRcFile); } catch {}
-        scrubMountConfigSecrets(nodePath.join(configDir, mountTarget.id));
-        return { success: true };
+      let pid = readPid(mountTarget.id);
+      let rcPort = readRcPort(mountTarget.id);
+      let stillRunning = !!pid && isManagedRcloneProcess(pid, rcPort);
+      let unverifiedRunning = hasLiveUnverifiedProcess(mountTarget.id);
+      if (rcPort && await Fuse.rcAlive(mountTarget.id)) stillRunning = true;
+      if (stillRunning && !unverifiedRunning) {
+        killStaleProcess(mountTarget.id);
+        await sleep(1500);
+        pid = readPid(mountTarget.id);
+        rcPort = readRcPort(mountTarget.id);
+        stillRunning = !!pid && isManagedRcloneProcess(pid, rcPort);
+        unverifiedRunning = hasLiveUnverifiedProcess(mountTarget.id);
+        if (rcPort && await Fuse.rcAlive(mountTarget.id)) stillRunning = true;
       }
 
-      // rc 方式卸载失败，回退到强制终止进程
-      killStaleProcess(mountTarget.id);
-      await sleep(1500);
-
-      // 清理文件
-      try { nodeFs.unlinkSync(mountConfigRcFile); } catch {}
-      scrubMountConfigSecrets(nodePath.join(configDir, mountTarget.id));
-
-      // 最终检查
-      const finalState = await Fuse.checkMount(mountTarget.mountPoint);
-      if (!finalState) {
-        return { success: true };
-      }
-
-      // 进程已终止但盘符残留（幽灵盘符）
       if (Platform.windows() && mountTarget.mountPoint) {
         await cleanupGhostDrive(mountTarget.mountPoint);
-        const afterCleanup = await Fuse.checkMount(mountTarget.mountPoint);
-        if (!afterCleanup) {
-          return { success: true };
-        }
       }
-
-      return { success: false, desc: "卸载失败，请手动卸载" };
-
-    } catch (error) {
-      return { success: false, desc: error?.message };
+      if (stillRunning || unverifiedRunning) {
+        const desc = unverifiedRunning
+          ? '卸载失败：发现无法确认归属的运行中进程，请先人工检查'
+          : '卸载失败：rclone 进程仍在运行，请稍后重试';
+        Fuse.setRuntimeStatus(mountTarget.id, 'error', desc);
+        return { success: false, desc };
+      }
+      for (const suffix of ['pid', 'rc', 'conf', 'log']) {
+        try { nodeFs.unlinkSync(runtimeFilePath(mountTarget.id, suffix)); } catch {}
+        try { nodeFs.unlinkSync(legacyRuntimeFilePath(mountTarget.id, suffix)); } catch {}
+      }
+      if (options.forgetAutoMount) {
+        store.delete(`app.openAtLogin.targets.${mountTarget.id}`);
+      }
+      store.delete(activeMountKey(mountTarget.id));
+      Fuse.setRuntimeStatus(mountTarget.id, 'unmounted');
+      return { success: true };
+    } catch (error: any) {
+      const desc = error?.message || String(error);
+      Fuse.setRuntimeStatus(mountTarget.id, 'error', desc);
+      return { success: false, desc };
     }
   }
 
   /** 刷新指定目录的 VFS 缓存（立即从远程读取更新）
    *  根目录时省略 dir 参数（rclone 对 dir="" 或 dir="/" 会报 "file does not exist"）
    *  子目录路径去掉前导 "/" */
-  private static async vfsRefreshRC(targetId: string, dir: string): Promise<RcResponse> {
+  public static async vfsRefreshRC(targetId: string, dir: string): Promise<RcResponse> {
     const rcPort = readRcPort(targetId);
     if (!rcPort) { console.log(`[VFS] vfsRefresh skip: no rc port for ${targetId}`); return { status: 0, body: 'no rc port' }; }
     const isRoot = !dir || dir === '/';
@@ -495,7 +717,7 @@ export class Fuse {
   }
 
   /** 清除指定文件的 VFS 缓存（下次访问时自动拉取） */
-  private static async vfsForgetRC(targetId: string, file: string): Promise<RcResponse> {
+  public static async vfsForgetRC(targetId: string, file: string): Promise<RcResponse> {
     const rcPort = readRcPort(targetId);
     if (!rcPort) { console.log(`[VFS] vfsForget skip: no rc port for ${targetId}`); return { status: 0, body: 'no rc port' }; }
     console.log(`[VFS] vfsForget target=${targetId} file="${file}"`);
@@ -504,7 +726,7 @@ export class Fuse {
 
   /** 清除指定目录的 VFS 缓存（下次访问时从远程重新拉取）
    *  根目录时省略 dir 参数（同 vfsRefresh） */
-  private static async vfsForgetDirRC(targetId: string, dir: string): Promise<RcResponse> {
+  public static async vfsForgetDirRC(targetId: string, dir: string): Promise<RcResponse> {
     const rcPort = readRcPort(targetId);
     if (!rcPort) { console.log(`[VFS] vfsForgetDir skip: no rc port for ${targetId}`); return { status: 0, body: 'no rc port' }; }
     const isRoot = !dir || dir === '/';
@@ -518,7 +740,8 @@ export class Fuse {
   /** 获取存储的挂载目标信息 */
   private static getStoredTarget(targetId: string): { connection: Connection; mountTarget: MountTarget } | null {
     const stored = store.get(`app.openAtLogin.targets.${targetId}`) as { connection: Connection; mountTarget: MountTarget } | undefined;
-    return stored || null;
+    if (!stored) return null;
+    return { ...stored, connection: decryptConnectionSecrets(stored.connection) };
   }
 
   /** 将 app 层路径转换为 VFS 相对路径（strip mount 的 pathPrefix）
@@ -550,7 +773,7 @@ export class Fuse {
  *            {cacheDir}/vfsMeta/{remoteName}/{remoteRoot}/{vfsPath}
  *  例: cacheDir/vfs/BucketView_aigc/aigc-assets/TRAE_SOLO_CN-Setup-x64.exe
  *      cacheDir/vfsMeta/BucketView_aigc/aigc-assets/TRAE_SOLO_CN-Setup-x64.exe */
-  private static deleteVfsDiskCache(
+  public static deleteVfsDiskCache(
     connectionId: string, bucket: string, pathPrefix: string,
     vfsPaths: string[], cacheDir: string,
   ): void {

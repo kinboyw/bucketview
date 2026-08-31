@@ -111,8 +111,6 @@ export const useSettingStore = defineStore('setting', {
     const data: Setting = {
       appVersion: "",
       fuseBin: "",
-      flashUploadEnabled: true,
-      flashUploadThresholdMB: 50,
       defaultCacheDirectory: "",
       defaultPageSize: 20,
       defaultDownloadDirectory: "",
@@ -146,12 +144,6 @@ export const useSettingStore = defineStore('setting', {
     },
   },
   actions: {
-    setFlashUploadEnabled(enabled: boolean) {
-      this.flashUploadEnabled = enabled;
-    },
-    setFlashUploadThresholdMB(threshold: number) {
-      this.flashUploadThresholdMB = threshold;
-    },
     setDefaultCacheDirectory(dir: string) {
       this.defaultCacheDirectory = dir;
     },

@@ -14,7 +14,7 @@ import {
 import nodeFs from 'node:fs';
 import { Readable } from 'node:stream';
 import nodePath from 'node:path';
-import { S3Client, ListBucketsCommand, ListObjectsV2Command, PutObjectCommandInput, CompleteMultipartUploadCommandOutput, GetObjectCommand, ListObjectsV2CommandInput, PutObjectCommand, DeleteObjectsCommand, DeleteObjectCommand, ObjectIdentifier, HeadObjectCommand, ChecksumMode } from "@aws-sdk/client-s3";
+import { S3Client, ListBucketsCommand, ListObjectsV2Command, PutObjectCommandInput, GetObjectCommand, ListObjectsV2CommandInput, PutObjectCommand, DeleteObjectsCommand, DeleteObjectCommand, ObjectIdentifier, HeadObjectCommand, ChecksumMode } from "@aws-sdk/client-s3";
 import * as crypto from 'node:crypto';
 import { Progress, Upload } from '@aws-sdk/lib-storage';
 import { Logger, MakeProgress, md5sum } from './utils';
@@ -22,6 +22,50 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { ProxyAgent } from "proxy-agent";
 const logger = new Logger("warn");
+
+function inferContentType(filePath: string): string | undefined {
+  const ext = nodePath.extname(filePath || '').toLowerCase();
+  if (!ext) return undefined;
+
+  const contentTypeMap: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.htm': 'text/html; charset=utf-8',
+    '.xhtml': 'application/xhtml+xml',
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.mjs': 'application/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.xml': 'application/xml; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.txt': 'text/plain; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
+    '.csv': 'text/csv; charset=utf-8',
+    '.wasm': 'application/wasm',
+    '.ico': 'image/x-icon',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp',
+    '.avif': 'image/avif',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.ogg': 'audio/ogg',
+    '.pdf': 'application/pdf',
+    '.zip': 'application/zip',
+    '.gz': 'application/gzip',
+    '.tar': 'application/x-tar',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.otf': 'font/otf',
+  };
+
+  return contentTypeMap[ext];
+}
 
 export class S3Storage implements Storage {
   name = 'BucketView';
@@ -106,8 +150,13 @@ export class S3Storage implements Storage {
 
   async getObject(options: TransferObjectOption & { forceOverwrite?: boolean; resumeFrom?: { filePath: string; downloaded: number; total: number } }, cb: ProgressCallback, cancelFunc: CancelFunction): Promise<void> {
     try {
-      const { objectName, localPath, forceOverwrite, resumeFrom } = options;
+      const { objectName, localPath, forceOverwrite, resumeFrom, partialPath: requestedPartialPath } = options;
       const { bucket } = this;
+
+      if (cancelFunc && cancelFunc()) {
+        cb && cb({ status: "cancel", desc: '下载已取消' });
+        return;
+      }
 
       const headObjectCommand = new HeadObjectCommand({
         Bucket: bucket,
@@ -115,18 +164,40 @@ export class S3Storage implements Storage {
       });
       const stat = await this.s3Client.send(headObjectCommand);
       const totalBytes = stat.ContentLength || 0;
+      const remoteEtag = stat.ETag;
+      const remoteVersionId = (stat as any).VersionId;
+
+      // New downloads use a staging file. Keep accepting an older task's
+      // direct target path when it is the only existing resume source.
+      let stagingPath = requestedPartialPath || `${localPath}.bucketview.part`;
+      if (
+        resumeFrom?.filePath &&
+        nodeFs.existsSync(resumeFrom.filePath) &&
+        resumeFrom.filePath !== stagingPath &&
+        !nodeFs.existsSync(stagingPath)
+      ) {
+        stagingPath = resumeFrom.filePath;
+      }
 
       // ── forceOverwrite: delete existing file to prevent leftover garbage bytes ──
       if (forceOverwrite) {
         try { nodeFs.unlinkSync(localPath); } catch {}
+        if (stagingPath !== localPath) {
+          try { nodeFs.unlinkSync(stagingPath); } catch {}
+        }
       }
 
       // Determine download offset: resume from partial file if it exists
       let downloadOffset = 0;
-      let verifiedResume = false;
-      if (resumeFrom && resumeFrom.filePath && nodeFs.existsSync(resumeFrom.filePath)) {
-        const localSize = nodeFs.statSync(resumeFrom.filePath).size;
+      if (!forceOverwrite && nodeFs.existsSync(stagingPath)) {
+        const localSize = nodeFs.statSync(stagingPath).size;
         if (localSize > 0 && localSize < totalBytes) {
+          // Without a stable validator, a byte-range resume cannot be made
+          // safe. Restart from zero instead of silently mixing versions.
+          if (!remoteEtag && !remoteVersionId) {
+            try { nodeFs.unlinkSync(stagingPath); } catch {}
+            downloadOffset = 0;
+          } else {
           // Verify partial file boundary integrity: download last 1KB from S3 and compare
           const probeSize = Math.min(localSize, 1024);
           const probeStart = localSize - probeSize;
@@ -135,6 +206,8 @@ export class S3Storage implements Storage {
               Bucket: bucket,
               Key: this.resolveKey(objectName),
               Range: `bytes=${probeStart}-${localSize - 1}`,
+              ...(remoteVersionId ? { VersionId: remoteVersionId } : {}),
+              ...(!remoteVersionId && remoteEtag ? { IfMatch: remoteEtag } : {}),
             }));
             const probeBody = probeResp.Body as Readable;
             const probeChunks: Buffer[] = [];
@@ -145,34 +218,35 @@ export class S3Storage implements Storage {
             });
             const probeRemote = Buffer.concat(probeChunks);
             // Read the same range from the local partial file
-            const fd = nodeFs.openSync(resumeFrom.filePath, 'r');
+            const fd = nodeFs.openSync(stagingPath, 'r');
             const probeLocal = Buffer.alloc(probeSize);
             nodeFs.readSync(fd, probeLocal, 0, probeSize, probeStart);
             nodeFs.closeSync(fd);
 
             if (probeLocal.equals(probeRemote)) {
               downloadOffset = localSize;
-              verifiedResume = true;
-              nodeFs.truncateSync(resumeFrom.filePath, downloadOffset);
+              nodeFs.truncateSync(stagingPath, downloadOffset);
             } else {
               // Boundary data mismatch → partial file is corrupted, delete and start fresh
               console.warn(`[STORAGE] resume boundary mismatch at offset ${probeStart}, deleting partial file and starting fresh`);
-              try { nodeFs.unlinkSync(resumeFrom.filePath); } catch {}
+              try { nodeFs.unlinkSync(stagingPath); } catch {}
               downloadOffset = 0;
             }
           } catch (e) {
             // Probe failed → can't verify, start fresh to guarantee correctness
             console.warn('[STORAGE] resume boundary probe failed, starting fresh:', e?.message);
-            try { nodeFs.unlinkSync(resumeFrom.filePath); } catch {}
+            try { nodeFs.unlinkSync(stagingPath); } catch {}
             downloadOffset = 0;
           }
+          }
         } else if (localSize >= totalBytes) {
-          // File already complete → just report success
-          cb && cb({ status: "success", percentage: 100, remaining: '0s' });
-          return;
+          // A complete-looking staging file still needs a checksum. Since
+          // compatible providers may not expose one, redownload safely.
+          try { nodeFs.unlinkSync(stagingPath); } catch {}
+          downloadOffset = 0;
         } else {
           // localSize == 0 → delete empty file and start fresh
-          try { nodeFs.unlinkSync(resumeFrom.filePath); } catch {}
+          try { nodeFs.unlinkSync(stagingPath); } catch {}
           downloadOffset = 0;
         }
         // If localSize == 0, fall through to fresh download from offset 0
@@ -194,6 +268,8 @@ export class S3Storage implements Storage {
         Bucket: bucket,
         Key: this.resolveKey(objectName),
       };
+      if (remoteVersionId) getCmdParams.VersionId = remoteVersionId;
+      else if (remoteEtag) getCmdParams.IfMatch = remoteEtag;
       if (downloadOffset > 0) {
         getCmdParams.Range = `bytes=${downloadOffset}-`;
       }
@@ -207,7 +283,7 @@ export class S3Storage implements Storage {
           await new Promise(r => setTimeout(r, delay));
           // Re-check cancel before retrying
           if (cancelFunc && cancelFunc()) {
-            cb && cb({ status: "error", desc: '下载已取消' });
+            cb && cb({ status: "cancel", desc: '下载已取消' });
             return;
           }
         }
@@ -216,10 +292,19 @@ export class S3Storage implements Storage {
           const resp = await this.s3Client.send(new GetObjectCommand(getCmdParams));
           const body = resp.Body as Readable;
 
+          if (downloadOffset > 0) {
+            const expectedLength = totalBytes - downloadOffset;
+            const contentRange = String((resp as any).ContentRange || '');
+            const expectedPrefix = `bytes ${downloadOffset}-`;
+            if (!contentRange.startsWith(expectedPrefix) || (resp.ContentLength !== undefined && resp.ContentLength !== expectedLength)) {
+              throw new Error(`续传响应范围无效：${contentRange || '缺少 Content-Range'}`);
+            }
+          }
+
           // WriteStream: append mode for resume, overwrite for fresh
           const writeFlags = downloadOffset > 0 ? 'r+' : 'w';
           const writeStart = downloadOffset > 0 ? downloadOffset : undefined;
-          const writeStream = nodeFs.createWriteStream(localPath, {
+          const writeStream = nodeFs.createWriteStream(stagingPath, {
             flags: writeFlags,
             start: writeStart,
           });
@@ -227,6 +312,12 @@ export class S3Storage implements Storage {
           let bytesWritten = 0;
           let lastEmitTime = 0;
           let cancelled = false;
+          let cancelReported = false;
+          const reportCancel = () => {
+            if (cancelReported) return;
+            cancelReported = true;
+            cb && cb({ status: "cancel", desc: '下载已取消' });
+          };
           let settled = false;
           lastError = null;
 
@@ -271,6 +362,7 @@ export class S3Storage implements Storage {
             body.on('error', (err) => {
               writeStream.end();
               if (cancelled) {
+                reportCancel();
                 settle('resolve');
               } else {
                 settle('reject', err);
@@ -284,15 +376,29 @@ export class S3Storage implements Storage {
             });
             writeStream.on('finish', () => {
               if (cancelled) {
+                reportCancel();
                 const actualSize = downloadOffset + bytesWritten;
-                try { nodeFs.truncateSync(localPath, actualSize); } catch {}
+                try { nodeFs.truncateSync(stagingPath, actualSize); } catch {}
                 settle('resolve');
                 return;
               }
               // Ensure file is exactly totalBytes
-              try { nodeFs.truncateSync(localPath, totalBytes); } catch {}
+              try { nodeFs.truncateSync(stagingPath, totalBytes); } catch {}
               const finalSize = downloadOffset + bytesWritten;
               if (finalSize >= totalBytes) {
+                try {
+                  const fd = nodeFs.openSync(stagingPath, 'r');
+                  nodeFs.fsyncSync(fd);
+                  nodeFs.closeSync(fd);
+                  if (stagingPath !== localPath) {
+                    try { nodeFs.unlinkSync(localPath); } catch {}
+                    nodeFs.renameSync(stagingPath, localPath);
+                  }
+                } catch (finalizeError: any) {
+                  cb && cb({ status: "error", desc: `下载完成但无法保存文件：${finalizeError?.message || finalizeError}` });
+                  settle('resolve');
+                  return;
+                }
                 cb && cb({ status: "success", percentage: 100, remaining: '0s' });
               } else {
                 cb && cb({ status: "error", desc: `下载不完整：${finalSize}/${totalBytes} 字节` });
@@ -311,15 +417,18 @@ export class S3Storage implements Storage {
             // Auth/range error: don't retry
             break;
           }
+          if (/续传响应范围无效/.test(err?.message || '')) break;
           console.warn(`[STORAGE] download attempt ${attempt + 1} failed:`, err?.message);
         }
       }
 
       // All retries exhausted
-      cb && cb({ status: "error", desc: lastError?.message || '下载失败' });
+      if (cancelFunc && cancelFunc()) cb && cb({ status: "cancel", desc: '下载已取消' });
+      else cb && cb({ status: "error", desc: lastError?.message || '下载失败' });
     } catch (err) {
       console.log('[STORAGE] get object api, ' + err)
-      cb && cb({ status: "error", desc: err.message })
+      if (cancelFunc && cancelFunc()) cb && cb({ status: "cancel", desc: '下载已取消' });
+      else cb && cb({ status: "error", desc: err.message })
     }
   }
 
@@ -327,6 +436,10 @@ export class S3Storage implements Storage {
     try {
       const { objectName, localPath } = options;
       const { bucket = '' } = this;
+      if (cancelFunc && cancelFunc()) {
+        cb && cb({ status: "cancel", desc: '上传已取消' });
+        return;
+      }
       const stat = nodeFs.statSync(localPath);
       const makeProgress = new MakeProgress(stat.size)
 
@@ -347,6 +460,7 @@ export class S3Storage implements Storage {
         Bucket: bucket,
         Key: this.resolveKey(objectName),
         Body: readableStream,
+        ContentType: inferContentType(objectName || localPath),
         ChecksumAlgorithm: "CRC32C",
         // ContentMD5: md5Hash
       };
@@ -371,25 +485,30 @@ export class S3Storage implements Storage {
           status: "running",
         })
         if (cancelFunc && cancelFunc()) {
-          upload.abort()
+          void upload.abort().catch(() => undefined)
         }
       })
 
-      const response = await upload.done()
-      if ((response as CompleteMultipartUploadCommandOutput).Location) {
-        cb && cb({
-          status: "success",
-          percentage: 100,
-          remaining: '0s',
-          filesize: stat.size,
-        })
-      }
+      await upload.done()
+      // Upload.done() is successful even when a compatible provider does not
+      // return Location (and for single-part uploads). Treat resolution as
+      // the success signal instead of depending on an optional response field.
+      cb && cb({
+        status: "success",
+        percentage: 100,
+        remaining: '0s',
+        filesize: stat.size,
+      })
     } catch (err) {
       console.log('[STORAGE] pub object api, ' + err);
-      cb && cb({
-        status: "error",
-        desc: err.message as string
-      });
+      if (cancelFunc && cancelFunc()) {
+        cb && cb({ status: "cancel", desc: '上传已取消' });
+      } else {
+        cb && cb({
+          status: "error",
+          desc: err.message as string
+        });
+      }
     }
   }
 

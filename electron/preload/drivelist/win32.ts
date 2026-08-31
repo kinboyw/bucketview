@@ -1,27 +1,47 @@
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
+import nodeFs from "node:fs";
 import { DriveDataInterface } from "../types";
 
+function getExistingDriveLetters(): DriveDataInterface[] {
+  const drives: DriveDataInterface[] = [];
+  for (let code = 65; code <= 90; code++) {
+    const mountpoint = `${String.fromCharCode(code)}:`;
+    try {
+      if (nodeFs.existsSync(`${mountpoint}\\`)) {
+        drives.push({ total: 0, used: 0, available: 0, percentageUsed: 0, mountpoint, name: "" });
+      }
+    } catch {}
+  }
+  return drives;
+}
+
 export const execDriveList = (cb: any) => {
-  // WMIC 获取本地和已连接的逻辑磁盘
-  exec(
-    "WMIC LOGICALDISK GET Name, VolumeName",
-    { windowsHide: true, timeout: 5000 },
-    (wmicErr, wmicStdout) => {
+  // PowerShell/CIM is available on supported Windows installations where WMIC may be absent.
+  execFile(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,VolumeName | ConvertTo-Json -Compress"],
+    { windowsHide: true, timeout: 5000, maxBuffer: 1024 * 1024 },
+    (cimErr, cimStdout) => {
       const drives: DriveDataInterface[] = [];
 
-      // 解析 WMIC 结果
-      if (!wmicErr && wmicStdout) {
-        const lines = wmicStdout
-          .replace(/\r\r\n/g, "\n")
-          .split("\n")
-          .filter((line: string) => line.trim().length > 0)
-          .slice(1);
-        for (const line of lines) {
-          const match = line.trim().match(/^([A-Z]:)\s*(.*)/);
-          if (match) {
-            drives.push({ total: 0, used: 0, available: 0, percentageUsed: 0, mountpoint: match[1], name: match[2].trim() });
+      if (!cimErr && cimStdout) {
+        try {
+          const parsed = JSON.parse(cimStdout);
+          const items = Array.isArray(parsed) ? parsed : [parsed];
+          for (const item of items) {
+            const mountpoint = String(item?.DeviceID || '').trim().toUpperCase();
+            if (!/^[A-Z]:$/.test(mountpoint)) continue;
+            drives.push({ total: 0, used: 0, available: 0, percentageUsed: 0, mountpoint, name: String(item?.VolumeName || '').trim() });
           }
+        } catch {
+          // Fall through to net use; an empty result is safer than a false mounted state.
         }
+      }
+
+      // PowerShell/CIM can be unavailable in restricted desktop sessions.
+      // Keep system and already-created drive letters occupied in that case.
+      for (const drive of getExistingDriveLetters()) {
+        if (!drives.some(item => item.mountpoint === drive.mountpoint)) drives.push(drive);
       }
 
       // net use 转获取断开状态的网络盘（WMIC不会列出它们）

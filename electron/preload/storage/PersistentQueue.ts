@@ -7,7 +7,7 @@ const TABLE_FAILED = 'queue_failed';
 const TABLE_SUCCEEDED = 'queue_succeded';
 const TABLE_RECORDS = 'transfer_records';
 
-interface JobRow {
+export interface JobRow {
   id: number;
   job: string;
 }
@@ -284,7 +284,12 @@ export default class PersistentQueue extends EventEmitter {
       return;
     }
     const now = Date.now();
-    this.db.prepare(`INSERT OR REPLACE INTO ${TABLE_RECORDS} (uid, data, updated_at) VALUES (?, ?, ?)`).run(uid, JSON.stringify(data), now);
+    const persisted = data && typeof data === 'object' ? { ...data } : data;
+    // Transfer records are UI snapshots, not credential storage. The active
+    // job keeps its encrypted connection separately and the renderer can
+    // rehydrate it from the connection id when a retry is requested.
+    if (persisted && typeof persisted === 'object') delete persisted.connection;
+    this.db.prepare(`INSERT OR REPLACE INTO ${TABLE_RECORDS} (uid, data, updated_at) VALUES (?, ?, ?)`).run(uid, JSON.stringify(persisted), now);
   }
 
   getTransferRecord(uid: string): string | null {

@@ -12,7 +12,7 @@ export const getDriveList = (): Promise<DriveDataInterface[]> => {
       (
         err: ExecException | ExecFileException | null,
         driveList: DriveDataInterface[]
-      ) => resolve(driveList)
+      ) => resolve(driveList || [])
     );
   });
 };

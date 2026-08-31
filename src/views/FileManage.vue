@@ -68,10 +68,6 @@
                   <span class="fab-menu-label">默认</span>
                   <span :class="['fab-dot', { 'fab-dot-on': configStore.defaultTargetId === activeConnectionId }]"></span>
                 </div>
-                <div class="fab-menu-item" @click="handleToggleFlashUpload">
-                  <span class="fab-menu-label">闪传</span>
-                  <span :class="['fab-dot', { 'fab-dot-on': settingStore.flashUploadEnabled }]"></span>
-                </div>
                 <div class="fab-menu-sep"></div>
                 <div class="fab-menu-link" @click="configDrawerVisible = true"><SettingOutlined /> 配置</div>
                 <div class="fab-menu-link" @click="auditModalVisible = true"><FileTextOutlined /> 日志</div>
@@ -175,13 +171,6 @@
                   <template #icon><DeleteOutlined /></template>
                 </a-button>
 
-                <a-button
-                  :class="['icon-btn', 'flash-btn', { 'flash-btn-active': settingStore.flashUploadEnabled }]"
-                  :title="settingStore.flashUploadEnabled ? `闪传已开启 (≥${settingStore.flashUploadThresholdMB || 50}MB)` : '闪传已关闭'"
-                  @click="handleToggleFlashUpload"
-                >
-                  <ThunderboltOutlined />
-                </a-button>
               </div>
             </div>
 
@@ -609,7 +598,7 @@
       class="context-menu"
       :style="{ top: `${hotbarContextMenu.y}px`, left: `${hotbarContextMenu.x}px` }"
     >
-      <div class="context-menu-item" v-if="!activeTabConnectionIds.includes(hotbarContextMenu.conn?.id)" @click="handleHotbarClick(hotbarContextMenu.conn?.id); hideHotbarContextMenu()">
+      <div class="context-menu-item" v-if="hotbarContextMenu.conn && !activeTabConnectionIds.includes(hotbarContextMenu.conn.id)" @click="handleHotbarClick(hotbarContextMenu.conn.id); hideHotbarContextMenu()">
         <SwapOutlined /> 连接
       </div>
       <div class="context-menu-item" @click="handleHotbarMenuEdit(hotbarContextMenu.conn); hideHotbarContextMenu()">
@@ -621,7 +610,7 @@
       <div class="context-menu-item" @click="handleHotbarMenuMount(hotbarContextMenu.conn); hideHotbarContextMenu()" v-if="hasMounts(hotbarContextMenu.conn)">
         <LinkOutlined /> 挂载
       </div>
-      <div class="context-menu-item" v-if="activeTabConnectionIds.includes(hotbarContextMenu.conn?.id)" @click="handleCloseTab(hotbarContextMenu.conn?.id); hideHotbarContextMenu()">
+      <div class="context-menu-item" v-if="hotbarContextMenu.conn && activeTabConnectionIds.includes(hotbarContextMenu.conn.id)" @click="handleCloseTab(hotbarContextMenu.conn.id); hideHotbarContextMenu()">
         <CloseOutlined /> 关闭连接
       </div>
     </div>
@@ -655,7 +644,6 @@ import {
   FileTextOutlined,
   CheckCircleFilled,
   CloseCircleFilled,
-  ThunderboltOutlined,
   SettingOutlined,
   PlusOutlined,
   FolderOpenOutlined,
@@ -694,6 +682,7 @@ import {
   ListObjectsResponse,
   SignObjectResponse,
   Connection,
+  MountTarget,
 } from '../../electron/preload/types';
 import StringUtil from '../common/stringUtil';
 import { v4 as uuidv4 } from 'uuid';
@@ -719,7 +708,7 @@ const VueOfficeExcel = defineAsyncComponent(() => import('./components/office/Ex
 const VueOfficePptx = defineAsyncComponent(() => import('./components/office/PptxPreview.vue'));
 
 interface NavPopupCacheEntry {
-  dirs: NavPopupItem[];
+  dirs: Array<{ name: string; objectName: string; hasSubDirs?: boolean }>;
   timestamp: number;
 }
 const navPopupCache = new Map<string, NavPopupCacheEntry>();
@@ -760,7 +749,6 @@ export default defineComponent({
     FileTextOutlined,
     CheckCircleFilled,
     CloseCircleFilled,
-    ThunderboltOutlined,
     ArrowUpOutlined,
     ArrowDownOutlined,
     DownOutlined,
@@ -1287,11 +1275,33 @@ export default defineComponent({
       return configStore.enabledTargetsByConnectionId(activeConnectionId.value);
     });
 
+    const normalizeMountObjectPath = (value: string) => String(value || '')
+      .replace(/\\/g, '/')
+      .split('/')
+      .filter(Boolean)
+      .join('/');
+
+    const currentMountObjectPath = computed(() => {
+      const parts = [
+        normalizeMountObjectPath(activePathPrefix.value || ''),
+        normalizeMountObjectPath(tableState.currentDirectory === '/' ? '' : tableState.currentDirectory || ''),
+      ].filter(Boolean);
+      return parts.join('/');
+    });
+
+    const mountPrefixMatches = (objectPath: string, mountPrefix: string) => {
+      const path = normalizeMountObjectPath(objectPath);
+      const prefix = normalizeMountObjectPath(mountPrefix);
+      return !prefix || path === prefix || path.startsWith(prefix + '/');
+    };
+
     // 当前 bucket 对应的挂载目标（列表页当前所在桶）
     const currentBucketMountTarget = computed(() => {
       const bucket = activeBucket.value;
       if (!bucket) return undefined;
-      return activeMountTargets.value.find(t => t.bucket === bucket);
+      return activeMountTargets.value
+        .filter(t => t.bucket === bucket && mountPrefixMatches(currentMountObjectPath.value, t.pathPrefix || ''))
+        .sort((a, b) => normalizeMountObjectPath(b.pathPrefix || '').length - normalizeMountObjectPath(a.pathPrefix || '').length)[0];
     });
 
     const currentBucketMountStatus = computed(() => {
@@ -1329,6 +1339,12 @@ export default defineComponent({
     // ── 防抖 VFS 缓存刷新（文件级精准 + 验证 + 重试） ──
     let vfsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
     interface VfsChangeEntry {
+      targetId: string;
+      connectionId: string;
+      mountPoint: string;
+      bucket: string;
+      pathPrefix: string;
+      cacheDirectory: string;
       dir: string;
       forgetFiles: string[];   // 需要失效内容缓存的文件
       expectDeleted: string[]; // 期望从挂载目录消失的文件（验证用）
@@ -1340,7 +1356,8 @@ export default defineComponent({
 
     const scheduleVfsRefresh = (dir: string, opts?: { forgetFiles?: string[]; expectDeleted?: string[]; expectAdded?: string[] }) => {
       const target = currentBucketMountTarget.value;
-      if (!target || currentBucketMountStatus.value !== 'mounted') return;
+      const conn = activeConnection.value;
+      if (!target || !conn || currentBucketMountStatus.value !== 'mounted') return;
       // 检查目录是否在 mount 的 pathPrefix 范围内
       if (!fuse.isWithinMountScope(dir, target.pathPrefix || '')) {
         console.log(`[VFS] skip: dir "${dir}" is outside mount scope "${target.pathPrefix}"`);
@@ -1350,67 +1367,92 @@ export default defineComponent({
       const expectDeleted = opts?.expectDeleted || [];
       const expectAdded = opts?.expectAdded || [];
       // 合并同一目录的变更
-      const existing = vfsPendingChanges.find(c => c.dir === dir);
+      const existing = vfsPendingChanges.find(c => c.targetId === target.id && c.dir === dir);
       if (existing) {
         for (const f of forgetFiles) if (!existing.forgetFiles.includes(f)) existing.forgetFiles.push(f);
         for (const f of expectDeleted) if (!existing.expectDeleted.includes(f)) existing.expectDeleted.push(f);
         for (const f of expectAdded) if (!existing.expectAdded.includes(f)) existing.expectAdded.push(f);
       } else {
-        vfsPendingChanges.push({ dir, forgetFiles, expectDeleted, expectAdded });
+        vfsPendingChanges.push({
+          targetId: target.id,
+          connectionId: conn.id,
+          mountPoint: target.mountPoint || '',
+          bucket: target.bucket,
+          pathPrefix: target.pathPrefix || '',
+          cacheDirectory: target.cacheDirectory || '',
+          dir,
+          forgetFiles,
+          expectDeleted,
+          expectAdded,
+        });
       }
       vfsSyncState.value = 'syncing';
       vfsFailedFiles.value = [];
       if (vfsRefreshTimer) clearTimeout(vfsRefreshTimer);
       vfsRefreshTimer = setTimeout(async () => {
         vfsRefreshTimer = null;
-        const targetId = target.id;
         let allVerified = true;
         const failed: string[] = [];
-        // 收集所有被删除文件的 basename（在清空 vfsPendingChanges 之前）
-        const deletedBasenames = vfsPendingChanges
-          .flatMap(c => c.expectDeleted)
-          .map(f => f.includes('/') ? f.slice(f.lastIndexOf('/') + 1) : f)
-          .filter(Boolean);
-        for (const change of vfsPendingChanges) {
-          const result = await fuse.vfsRefreshVerified(
-            targetId, change.dir, change.forgetFiles, change.expectDeleted, change.expectAdded,
-          );
-          if (!result.verified) {
+        const changes = vfsPendingChanges.splice(0, vfsPendingChanges.length);
+        for (const change of changes) {
+          try {
+            const result = await fuse.vfsRefreshVerified(
+              change.targetId, change.dir, change.forgetFiles, change.expectDeleted, change.expectAdded,
+            );
+            if (!result.verified) {
+              allVerified = false;
+              console.warn(`[VFS] refresh verified failed for dir="${change.dir}", retries=${result.retries}`);
+              if (result.stillPresent) failed.push(...result.stillPresent.map(f => `未删除: ${f}`));
+              if (result.stillMissing) failed.push(...result.stillMissing.map(f => `未出现: ${f}`));
+            }
+            if (result.verified && change.mountPoint && change.expectDeleted.length > 0) {
+              const deletedBasenames = change.expectDeleted
+                .map(f => f.includes('/') ? f.slice(f.lastIndexOf('/') + 1) : f)
+                .filter(Boolean);
+              if (deletedBasenames.length > 0) {
+                void fuse.notifyExplorerRefresh(
+                  change.mountPoint, deletedBasenames,
+                  change.targetId, change.dir,
+                  change.connectionId, change.bucket, change.pathPrefix,
+                  change.cacheDirectory,
+                );
+              }
+            }
+          } catch (error) {
             allVerified = false;
-            console.warn(`[VFS] refresh verified failed for dir="${change.dir}", retries=${result.retries}`);
-            // 收集失败文件名
-            if (result.stillPresent) failed.push(...result.stillPresent.map(f => `未删除: ${f}`));
-            if (result.stillMissing) failed.push(...result.stillMissing.map(f => `未出现: ${f}`));
+            failed.push(`刷新失败: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
-        vfsPendingChanges.length = 0;
         vfsSyncState.value = allVerified ? 'synced' : 'failed';
         vfsFailedFiles.value = failed;
         // synced 2秒后回到 idle；failed 持续显示直到下一次操作
         if (allVerified) {
-          // 通知 Windows Explorer 刷新挂载目录视图 + 清理 exe 可能重新引入的 VFS 缓存
-          const mountPoint = target.mountPoint;
-          if (mountPoint && deletedBasenames.length > 0) {
-            const conn = activeConnection.value;
-            const vfsDir = tableState.currentDirectory;
-            fuse.notifyExplorerRefresh(
-              mountPoint, deletedBasenames,
-              target.id, vfsDir,
-              conn.id, target.bucket, target.pathPrefix || '',
-              target.cacheDirectory || '',
-            );
-          }
           setTimeout(() => { if (vfsSyncState.value === 'synced') vfsSyncState.value = 'idle'; }, 2000);
         }
       }, 1200);
     };
 
+    let mountStatusRequestId = 0;
+    const mountTargetSnapshot = (target: MountTarget): MountTarget => ({
+      id: String(target.id),
+      connectionId: String(target.connectionId),
+      bucket: String(target.bucket || ''),
+      pathPrefix: String(target.pathPrefix || ''),
+      mountPoint: target.mountPoint ? String(target.mountPoint) : undefined,
+      cacheDirectory: target.cacheDirectory ? String(target.cacheDirectory) : undefined,
+      enabled: target.enabled === true,
+      autoMount: target.autoMount === true,
+    });
     const refreshMountStatus = () => {
+      const requestId = ++mountStatusRequestId;
       for (const target of configStore.mountTargets) {
         if (target.mountPoint && target.mountPoint.length > 0) {
-          fuse.checkMount(target.mountPoint).then((state: boolean) => {
-            mountStatusMap[target.id] = state;
+          const snapshot = mountTargetSnapshot(toRaw(target));
+          fuse.getMountStatus(snapshot).then((result: any) => {
+            if (requestId !== mountStatusRequestId) return;
+            mountStatusMap[target.id] = result.status === 'mounted';
           }).catch(() => {
+            if (requestId !== mountStatusRequestId) return;
             mountStatusMap[target.id] = false;
           });
         } else {
@@ -1444,7 +1486,7 @@ export default defineComponent({
         native.openLocalFolder(localPath);
         return;
       }
-      const ext = getFileExtenstion(objInfo.objectName).toLowerCase();
+      const ext = (getFileExtenstion(objInfo.objectName) || '').toLowerCase();
       const executableExts = ['exe', 'msi', 'bat', 'cmd', 'ps1', 'vbs', 'com', 'scr'];
       if (executableExts.includes(ext)) {
         native.showLocalFile(localPath);
@@ -1616,6 +1658,7 @@ export default defineComponent({
       searchKeyword: string;
       nextContinuationToken: string | null;
       paginationCurrent: number;
+      cachedAt: number;
     }> = {};
 
     const switchToConnection = (connectionId: string) => {
@@ -1690,7 +1733,7 @@ export default defineComponent({
 
       const filenames = await native.getLocalPaths(paths, prefix);
       filenames.forEach((transferFile) => {
-        uploadFile(transferContext, transferFile.prefix, transferFile.name, transferFile.size, transferFile.lastModified);
+        uploadFile(transferContext, transferFile.prefix, transferFile.name, transferFile.size);
       });
     };
 
@@ -2928,7 +2971,7 @@ export default defineComponent({
       if (mountStatusMap[targetId]) {
         auditStore.log('unmount', label, { description: `卸载 ${target.mountPoint}` });
         fuse.umount(rawConn, mountTarget).then((resp) => {
-          if (resp.success) { notification.success({ message: `${label} 卸载成功` }); }
+          if (resp.success) { mountStatusMap[targetId] = false; notification.success({ message: `${label} 卸载成功` }); }
           else { console.error('[MOUNT] 卸载失败:', resp.desc); notification.error({ message: `${label} 卸载失败`, description: resp.desc }); }
           refreshMountStatus();
         }).catch((err) => { console.error('[MOUNT] 卸载异常:', err); }).finally(() => { mountLoadingMap[targetId] = false; });
@@ -2951,6 +2994,7 @@ export default defineComponent({
           return fuse.mount(rawConn, mountTarget, ensure.path);
         }).then((resp) => {
           if (resp.success) {
+            mountStatusMap[targetId] = true;
             notification.success({ message: `${label} 挂载成功` });
             // 挂载成功：刷新当前目录（无需验证特定文件）
             scheduleVfsRefresh(tableState.currentDirectory, {});
@@ -2959,6 +3003,8 @@ export default defineComponent({
           refreshMountStatus();
         }).catch((err) => {
           console.error('[MOUNT] 挂载异常:', err);
+          mountStatusMap[targetId] = false;
+          refreshMountStatus();
           notification.error({ message: `${label} 挂载失败`, description: err?.message || String(err) });
         }).finally(() => { mountLoadingMap[targetId] = false; });
       }
@@ -2975,10 +3021,6 @@ export default defineComponent({
 
     const handleFabEnableToggle = () => {
       // 无操作：连接本身没有 enabled 字段，由挂载目标的 enabled 控制
-    };
-
-    const handleToggleFlashUpload = () => {
-      settingStore.flashUploadEnabled = !settingStore.flashUploadEnabled;
     };
 
     const handleFileTableRowSelect = (record: ObjectInfo, _selected: boolean, _selectedRows: ObjectInfo[], nativeEvent: Event) => {
@@ -3659,7 +3701,7 @@ export default defineComponent({
       }
     };
 
-    const uploadFile = async (transferContext: TransferContextSnapshot, prefix: string, filename: string, filesize: number, fileMtime: number) => {
+    const uploadFile = (transferContext: TransferContextSnapshot, prefix: string, filename: string, filesize: number) => {
       const uid = uuidv4();
       const objectName = StringUtil.trim(`${prefix}/${native.pathBasename(filename)}`, '/');
       const name = native.pathBasename(filename);
@@ -3678,28 +3720,6 @@ export default defineComponent({
         createdAt: Date.now(),
       }, transferContext);
 
-      // Flash upload check
-      const threshold = (settingStore.flashUploadThresholdMB ?? 50) * 1024 * 1024;
-      if (settingStore.flashUploadEnabled && filesize >= threshold && isTransferForActiveContext(t)) {
-        try {
-          const resp = await storage.headObject(defaultStorage, objectName);
-          if (resp.exists && resp.size === filesize) {
-            // 本地文件修改时间 ≤ 远端修改时间 → 文件未变更，跳过上传（容差1s）
-            const remoteMtime = resp.lastModified ? resp.lastModified.getTime() : 0;
-            if (fileMtime <= remoteMtime + 1000) {
-              t.status = 'skipped';
-              t.totalBytes = resp.size;
-              t.percentage = '100';
-              t.completedAt = Date.now();
-              transferStore.setRecord(uid, t);
-              return;
-            }
-          }
-        } catch {
-          // headObject failed → proceed with normal upload
-        }
-      }
-
       transferStore.setRecord(uid, t);
       storage.putObject(defaultStorage, t);
     };
@@ -3712,7 +3732,7 @@ export default defineComponent({
       const filenames = await native.getLocalFiles(prefix);
       if (!filenames || filenames.length == 0) return;
       filenames.forEach((transferFile) => {
-        uploadFile(transferContext, transferFile.prefix, transferFile.name, transferFile.size, transferFile.lastModified);
+        uploadFile(transferContext, transferFile.prefix, transferFile.name, transferFile.size);
       });
     };
 
@@ -3731,7 +3751,7 @@ export default defineComponent({
       const filenames = await native.getLocalFiles(prefix);
       if (!filenames || filenames.length == 0) return;
       filenames.forEach((transferFile) => {
-        uploadFile(transferContext, StringUtil.trim(transferFile.prefix, '/'), transferFile.name, transferFile.size, transferFile.lastModified);
+        uploadFile(transferContext, StringUtil.trim(transferFile.prefix, '/'), transferFile.name, transferFile.size);
       });
     };
 
@@ -3968,6 +3988,7 @@ export default defineComponent({
         type: 'download',
         uid: uid,
         localPath: localPath,
+        partialPath: `${localPath}.bucketview.part`,
         prefix: tableState.currentDirectory,
         objectName: objInfo.objectName,
         name: objInfo.name,
@@ -4156,6 +4177,7 @@ export default defineComponent({
       bucketMountInfoMap,
       mountStatusMap,
       mountLoadingMap,
+      refreshMountStatus,
       scheduleVfsRefresh,
       vfsSyncState,
       vfsFailedFiles,
@@ -4205,7 +4227,6 @@ export default defineComponent({
       handleFabTargetToggle,
       handleFabDefaultToggle,
       handleFabEnableToggle,
-      handleToggleFlashUpload,
       settingStore,
       auditStore,
       auditModalVisible,

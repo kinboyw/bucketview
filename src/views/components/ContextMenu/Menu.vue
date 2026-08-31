@@ -8,7 +8,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, computed, onMounted, reactive, ref } from 'vue';
+import { defineComponent, computed, PropType } from 'vue';
 
 interface Menu {
   displayName: string;
@@ -19,9 +19,10 @@ interface Menu {
 export default defineComponent({
   name: 'ContextMenu',
   props: {
-    record: {},
-    menus: [],
-
+    record: { type: Object, default: () => ({}) },
+    menus: { type: Array as PropType<Menu[]>, default: () => [] },
+    x: { type: Number, default: 0 },
+    y: { type: Number, default: 0 },
   },
   components: {  },
   setup(props) {

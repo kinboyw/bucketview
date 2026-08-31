@@ -16,11 +16,6 @@
           <span v-if="failedTransferCount > 0" style="margin-left: 2px">{{ failedTransferCount }}</span>
         </a-button>
       </a-tooltip>
-      <a-tooltip title="恢复中断的传输任务">
-        <a-button type="text" size="small" @click="handleRecoverInterrupted" class="recover-btn">
-          <template #icon><ThunderboltOutlined /></template>
-        </a-button>
-      </a-tooltip>
       <a-tooltip title="清除记录">
         <a-button type="text" size="small" danger @click="handleClearTransferHistory" class="clear-history-btn">
           <template #icon><DeleteOutlined /></template>
@@ -305,47 +300,16 @@ export default defineComponent({
       transferStore.clearHistory();
     };
 
-    const handleRecoverInterrupted = () => {
-      const interrupted = storage.recoverInterrupted();
-      if (!interrupted || interrupted.length === 0) {
-        notification.info({ message: '没有中断的传输任务' });
-        return;
-      }
-      let recovered = 0;
-      for (const job of interrupted) {
-        if (!job.uid) continue;
-        storage.clearCancel(job.uid);
-        const existing = transferStore.queue[job.uid];
-        if (existing && (existing.status === 'running' || existing.status === 'waiting' || existing.status === 'success')) continue;
-        const t: TransferInfo = {
-          type: job.type || 'upload',
-          uid: job.uid,
-          name: job.name || (job.objectName ? native.pathBasename(job.objectName) : ''),
-          objectName: job.objectName || '',
-          localPath: job.localPath || '',
-          prefix: job.prefix || '',
-          bucket: job.bucket || '',
-          pathPrefix: job.pathPrefix || '',
-          connectionId: job.connectionId || job.connection?.id || '',
-          connection: job.connection,
-          sourceDirectory: job.sourceDirectory || job.prefix || '',
-          connectionLabel: job.connectionLabel || job.connectionId || job.connection?.id || '',
-          status: 'waiting',
-          totalBytes: job.totalBytes || 0,
-          createdAt: job.createdAt || Date.now(),
-        };
-        transferStore.setRecord(job.uid, t);
-        if (job.type === 'upload') storage.putObject(defaultStorage, t);
-        else storage.getObject(defaultStorage, t);
-        recovered++;
-      }
-      if (recovered > 0) notification.success({ message: `已恢复 ${recovered} 个传输任务` });
-      else notification.info({ message: '没有需要恢复的传输任务' });
-    };
-
     const handleFileTransferCancel = (uid: string) => {
       storage.markCancel(uid);
-      Object.assign(transferStore.queue[uid], { status: 'cancel' });
+      const record = transferStore.queue[uid];
+      if (record) {
+        transferStore.setRecord(uid, Object.assign(record, {
+          status: 'cancel',
+          errorDesc: '正在取消…',
+          completedAt: undefined,
+        }));
+      }
     };
 
     const handleOpenLocalFile = (localPath: string) => {
@@ -358,7 +322,10 @@ export default defineComponent({
       storage.clearCancel(uid);
 
       if (t.type === 'download' && t.localPath && t.totalBytes) {
-        const localSize = native.localFileSize(t.localPath);
+        const partialPath = t.partialPath || `${t.localPath}.bucketview.part`;
+        const partialSize = native.localFileSize(partialPath);
+        const legacySize = partialSize === null ? native.localFileSize(t.localPath) : null;
+        const localSize = partialSize !== null ? partialSize : legacySize;
         if (localSize !== null && localSize > 0 && localSize < t.totalBytes) {
           Object.assign(t, {
             status: 'waiting',
@@ -371,12 +338,13 @@ export default defineComponent({
             completedAt: undefined,
           });
           const resumeOptions = Object.assign({}, toRaw(props.ensureRecordContext(t)), {
-            resumeFrom: { filePath: t.localPath, downloaded: localSize, total: t.totalBytes },
+            partialPath,
+            resumeFrom: { filePath: partialPath, downloaded: localSize, total: t.totalBytes },
           });
           storage.getObject(defaultStorage, resumeOptions);
           return;
         }
-        if (localSize !== null) {
+        if (localSize !== null || partialSize !== null) {
           Object.assign(t, {
             status: 'waiting',
             percentage: undefined,
@@ -467,7 +435,6 @@ export default defineComponent({
       closeDrawer,
       toggleDrawer,
       handleClearTransferHistory,
-      handleRecoverInterrupted,
       handleFileTransferCancel,
       handleOpenLocalFile,
       handleTransferRetry,

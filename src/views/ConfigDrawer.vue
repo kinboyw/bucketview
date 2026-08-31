@@ -107,31 +107,6 @@
       </div>
     </div>
 
-    <!-- 传输设置 -->
-    <div v-if="activeTab === 'transfer'" class="drawer-content">
-      <div class="setting-card">
-        <div class="setting-row">
-          <span class="setting-label">闪传（跳过重复上传）</span>
-          <a-switch v-model:checked="flashUploadEnabled" @change="handleFlashUploadEnabledChange" />
-        </div>
-        <div class="setting-row" v-if="flashUploadEnabled">
-          <span class="setting-label">阈值（MB）</span>
-          <a-input-number
-            v-model:value="flashUploadThresholdMB"
-            :min="1"
-            :max="1024"
-            :step="10"
-            style="width: 100px"
-            size="small"
-            @change="handleFlashUploadThresholdChange"
-          />
-        </div>
-        <div class="setting-desc" v-if="flashUploadEnabled">
-          超过此大小的文件将自动检查远程是否已存在同名同大小文件
-        </div>
-      </div>
-    </div>
-
     <!-- 系统设置 -->
     <div v-if="activeTab === 'system'" class="drawer-content drawer-content-settings">
       <div class="setting-section">
@@ -439,7 +414,7 @@
             <a-auto-complete
               v-model:value="connectionModalFormState.group"
               :options="existingGroupOptions"
-              :filter-option="(input, option) => option.value.toLowerCase().includes(input.toLowerCase())"
+              :filter-option="(input: string, option: { value?: string }) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())"
               placeholder="默认分组"
               size="small"
             />
@@ -673,13 +648,19 @@
             </a-input>
           </a-form-item>
         </div>
+        <div class="compact-row">
+          <a-form-item label="开机自动挂载" class="compact-item compact-item-half">
+            <a-switch v-model:checked="targetModalFormState.autoMount" size="small" />
+            <span class="form-inline-hint">仅在应用以开机启动模式运行时生效</span>
+          </a-form-item>
+        </div>
       </a-form>
     </a-modal>
   </a-drawer>
 </template>
 
 <script lang="ts">
-import { defineComponent, reactive, ref, computed, watch, onMounted, onUnmounted, toRaw } from 'vue';
+import { defineComponent, reactive, ref, computed, watch, onMounted, toRaw } from 'vue';
 import {
   PlusOutlined,
   ImportOutlined,
@@ -746,8 +727,6 @@ export default defineComponent({
     const drawerOpen = computed(() => props.open ?? props.visible);
     const activeTab = ref('bucket');
     const endpointProtocol = ref<string>('http');
-    const flashUploadEnabled = ref<boolean>(settingStore.flashUploadEnabled ?? true);
-    const flashUploadThresholdMB = ref<number>(settingStore.flashUploadThresholdMB ?? 50);
     const fuseBinValue = ref<string>(settingStore.fuseBin || '');
     const defaultCacheDirectoryValue = ref<string>(settingStore.defaultCacheDirectory || '');
     const defaultPageSizeValue = ref<number>(settingStore.defaultPageSize || 20);
@@ -773,7 +752,6 @@ export default defineComponent({
 
     const tabs = [
       { key: 'bucket', label: '连接' },
-      { key: 'transfer', label: '传输' },
       { key: 'system', label: '系统' },
       { key: 'about', label: '关于' },
     ];
@@ -1014,7 +992,7 @@ export default defineComponent({
     };
 
     // 挂载 Modal
-    const targetModalFormState = ref({ bucket: '', pathPrefix: '', mountPoint: '', cacheDirectory: '' });
+    const targetModalFormState = ref({ bucket: '', pathPrefix: '', mountPoint: '', cacheDirectory: '', autoMount: false });
     const targetModalState = reactive<{ visible: boolean; connectionId: string; lockedBucket: string; editingTargetId: string }>({
       visible: false,
       connectionId: "",
@@ -1042,8 +1020,6 @@ export default defineComponent({
     const handleClose = () => emit('update:open', false);
 
     // ── 设置 ──
-    const handleFlashUploadEnabledChange = (enabled: boolean) => settingStore.setFlashUploadEnabled(enabled);
-    const handleFlashUploadThresholdChange = (threshold: number) => settingStore.setFlashUploadThresholdMB(threshold);
     const handleSelectFuse = () => { const name = native.getLocalFilename(); if (name) fuseBinValue.value = name; };
     const handleSelectDefaultCacheDirectory = () => { const paths = native.getLocalSaveFolder(); if (paths?.length) { defaultCacheDirectoryValue.value = paths[0]; settingStore.setDefaultCacheDirectory(paths[0]); } };
     const handleSelectDefaultDownloadDirectory = () => { const paths = native.getLocalSaveFolder(); if (paths?.length) { defaultDownloadDirectoryValue.value = paths[0]; settingStore.setDefaultDownloadDirectory(paths[0]); } };
@@ -1321,7 +1297,12 @@ export default defineComponent({
       bucketListFailed.value = false;
     };
 
-    const handleEditConnection = (conn: Connection) => {
+    const handleEditConnection = async (conn: Connection) => {
+      const targets = configStore.targetsByConnectionId(conn.id);
+      if (await hasActiveMount(targets)) {
+        notification.warning({ message: '请先卸载挂载', description: '连接配置正在被挂载使用，不能直接修改凭据或 Endpoint' });
+        return;
+      }
       mcImportEditingItem.value = null;
       connectionModalFormState.value = _.cloneDeep(toRaw(conn));
       endpointProtocol.value = conn.useSSL ? 'https' : 'http';
@@ -1334,7 +1315,7 @@ export default defineComponent({
     };
 
     const handleConnectionModalOk = () => {
-      connectionModalFormRef.value?.validateFields().then(() => {
+      connectionModalFormRef.value?.validateFields().then(async () => {
         const conn = _.cloneDeep(toRaw(connectionModalFormState.value));
         conn.useSSL = endpointProtocol.value === 'https';
         conn.bucket = conn.bucket || '';
@@ -1348,6 +1329,8 @@ export default defineComponent({
           return;
         }
         configStore.addConnection(conn);
+        const targets = configStore.targetsByConnectionId(conn.id);
+        await Promise.all(targets.map(target => fuse.syncAutoMount(_.cloneDeep(toRaw(conn)), _.cloneDeep(toRaw(target)))));
         if (!configStore.activeConnectionId) {
           configStore.setActiveConnection(conn.id);
         }
@@ -1363,34 +1346,90 @@ export default defineComponent({
       mcImportEditingItem.value = null;
     };
 
-    const handleDeleteConnection = (connectionId: string) => {
+    const excludedDriveLetters = (editingMountPoint?: string) => new Set(
+      configStore.mountTargets
+        .map(target => target.mountPoint)
+        .filter((mountPoint): mountPoint is string => !!mountPoint && mountPoint !== editingMountPoint)
+        .map(mountPoint => mountPoint.toUpperCase()),
+    );
+
+    const applyAvailableDrives = (occupied: string[], editingMountPoint?: string) => {
+      const excluded = excludedDriveLetters(editingMountPoint);
+      const occupiedSet = new Set(occupied.map(drive => drive.toUpperCase()));
+      const localFree = native.availableDriveLetters();
+      availableDrives.value = localFree.length === 0 ? [] : defaultDrives.filter((drive) =>
+        !occupiedSet.has(drive) && !excluded.has(drive) && localFree.includes(drive),
+      );
+    };
+
+    const refreshAvailableDrives = async (editingMountPoint?: string) => {
+      if (!isWindows) return;
+      applyAvailableDrives([], editingMountPoint);
+      try {
+        applyAvailableDrives(await fuse.driveList(), editingMountPoint);
+      } catch {
+        applyAvailableDrives([], editingMountPoint);
+      }
+    };
+
+    const getTargetRuntimeStatus = async (target: MountTarget) => {
+      const snapshot: MountTarget = {
+        id: String(target.id),
+        connectionId: String(target.connectionId),
+        bucket: String(target.bucket || ''),
+        pathPrefix: String(target.pathPrefix || ''),
+        mountPoint: target.mountPoint ? String(target.mountPoint) : undefined,
+        cacheDirectory: target.cacheDirectory ? String(target.cacheDirectory) : undefined,
+        enabled: target.enabled === true,
+        autoMount: target.autoMount === true,
+      };
+      try { return await fuse.getMountStatus(snapshot); }
+      catch { return { status: 'unmounted' as const }; }
+    };
+
+    const hasActiveMount = async (targets: MountTarget[]) => {
+      const statuses = await Promise.all(targets.map(target => getTargetRuntimeStatus(target)));
+      return statuses.some(status => status.status === 'mounted' || status.status === 'mounting' || status.status === 'unmounting');
+    };
+
+    const handleDeleteConnection = async (connectionId: string) => {
+      const targets = configStore.targetsByConnectionId(connectionId);
+      const conn = configStore.getConnectionById(connectionId);
+      if (conn) {
+        for (const target of targets) {
+          const resp = await fuse.umount(_.cloneDeep(toRaw(conn)), _.cloneDeep(toRaw(target)), { forgetAutoMount: true });
+          if (!resp.success) {
+            notification.error({ message: `删除连接失败`, description: `${target.bucket}：${resp.desc || '卸载失败'}` });
+            return;
+          }
+        }
+      }
       configStore.removeConnection(connectionId);
       notification.success({ message: `已删除连接 ${connectionId}` });
     };
 
     // ── 挂载目标管理 ──
-    const handleAddTarget = async (conn: Connection) => {
+    const handleAddTarget = (conn: Connection) => {
       targetModalFormState.value = {
         bucket: conn.bucket || '',
         pathPrefix: conn.pathPrefix || '',
         mountPoint: '',
         cacheDirectory: settingStore.defaultCacheDirectory || '',
+        autoMount: false,
       };
       targetModalState.connectionId = conn.id;
       targetModalState.lockedBucket = conn.bucket || '';
       targetModalState.editingTargetId = '';
 
-      // 获取可用盘符
+      availableDrives.value = [];
+      targetModalState.visible = true;
       if (isWindows) {
-        try {
-          const usedDrives = await fuse.driveList();
-          const bucketViewDrives = configStore.mountTargets.map(t => t.mountPoint).filter(d => d);
-          availableDrives.value = defaultDrives.filter(d => !usedDrives.includes(d) && !bucketViewDrives.includes(d));
-          // 自动分配第一个可用盘符
-          if (availableDrives.value.length > 0) {
+        void refreshAvailableDrives().then(() => {
+          if (!targetModalState.visible || targetModalState.editingTargetId) return;
+          if (availableDrives.value.length > 0 && !targetModalFormState.value.mountPoint) {
             targetModalFormState.value.mountPoint = availableDrives.value[0];
           }
-        } catch { availableDrives.value = defaultDrives; }
+        });
       }
 
       // 获取 bucket 列表
@@ -1398,39 +1437,48 @@ export default defineComponent({
         fetchBuckets(conn);
       }
 
-      targetModalState.visible = true;
     };
 
     const handleEditTarget = async (conn: Connection, target: MountTarget) => {
+      const runtime = await getTargetRuntimeStatus(target);
+      if (runtime.status === 'mounted' || runtime.status === 'mounting' || runtime.status === 'unmounting') {
+        notification.warning({ message: '请先卸载挂载', description: '挂载运行中不能修改 Bucket、挂载点或缓存目录' });
+        return;
+      }
       targetModalFormState.value = {
         bucket: target.bucket,
         pathPrefix: target.pathPrefix,
         mountPoint: target.mountPoint || '',
         cacheDirectory: target.cacheDirectory || '',
+        autoMount: target.autoMount === true,
       };
       targetModalState.connectionId = conn.id;
       targetModalState.lockedBucket = conn.bucket || '';
       targetModalState.editingTargetId = target.id;
 
-      if (isWindows) {
-        try {
-          const usedDrives = await fuse.driveList();
-          const bucketViewDrives = configStore.mountTargets.map(t => t.mountPoint).filter(d => d && d !== target.mountPoint);
-          availableDrives.value = defaultDrives.filter(d => !usedDrives.includes(d) && !bucketViewDrives.includes(d));
-        } catch { availableDrives.value = defaultDrives; }
-      }
+      availableDrives.value = [];
+      targetModalState.visible = true;
+      void refreshAvailableDrives(target.mountPoint);
 
       if (!targetModalState.lockedBucket) {
         fetchBuckets(conn);
       }
 
-      targetModalState.visible = true;
     };
 
-    const handleTargetModalOk = () => {
+    const handleTargetModalOk = async () => {
       const form = targetModalFormState.value;
+      form.pathPrefix = StringUtil.trim(form.pathPrefix || '', '/');
       if (!form.bucket || !form.mountPoint) {
         notification.error({ message: "请填写 Bucket 和挂载路径" });
+        return;
+      }
+      if (isWindows && !/^[A-Za-z]:$/.test(form.mountPoint.trim())) {
+        notification.error({ message: "盘符格式不合法", description: "请选择一个盘符，例如 M:" });
+        return;
+      }
+      if (!isWindows && !form.mountPoint.startsWith('/')) {
+        notification.error({ message: "挂载路径必须是绝对路径", description: "例如 /mnt/bucket" });
         return;
       }
       // pathPrefix 深度校验：不能比 connection 的 pathPrefix 更浅
@@ -1443,6 +1491,13 @@ export default defineComponent({
       const existingTarget = targetModalState.editingTargetId
         ? configStore.getTargetById(targetModalState.editingTargetId)
         : undefined;
+      if (existingTarget) {
+        const runtime = await getTargetRuntimeStatus(existingTarget);
+        if (runtime.status === 'mounted' || runtime.status === 'mounting' || runtime.status === 'unmounting') {
+          notification.warning({ message: '请先卸载挂载', description: '挂载运行中不能保存修改' });
+          return;
+        }
+      }
       const target: MountTarget = {
         id: `${targetModalState.connectionId}/${form.bucket}${form.pathPrefix ? '/' + form.pathPrefix : ''}`,
         connectionId: targetModalState.connectionId,
@@ -1451,13 +1506,29 @@ export default defineComponent({
         mountPoint: form.mountPoint,
         cacheDirectory: form.cacheDirectory,
         enabled: existingTarget ? existingTarget.enabled : true,
+        autoMount: form.autoMount === true,
       };
+      if (existingTarget && existingTarget.id !== target.id) {
+        const oldConn = configStore.getConnectionById(existingTarget.connectionId);
+        if (oldConn) await fuse.umount(_.cloneDeep(toRaw(oldConn)), _.cloneDeep(toRaw(existingTarget)), { forgetAutoMount: true });
+        configStore.removeMountTarget(existingTarget.id);
+      }
       configStore.addMountTarget(target);
+      if (conn) await fuse.syncAutoMount(_.cloneDeep(toRaw(conn)), _.cloneDeep(toRaw(target)));
       notification.success({ message: targetModalState.editingTargetId ? "编辑挂载成功" : "添加挂载成功", description: form.bucket });
       targetModalState.visible = false;
     };
 
-    const handleDeleteTarget = (targetId: string) => {
+    const handleDeleteTarget = async (targetId: string) => {
+      const target = configStore.getTargetById(targetId);
+      const conn = target ? configStore.getConnectionById(target.connectionId) : undefined;
+      if (target && conn) {
+        const resp = await fuse.umount(_.cloneDeep(toRaw(conn)), _.cloneDeep(toRaw(target)), { forgetAutoMount: true });
+        if (!resp.success) {
+          notification.error({ message: '删除挂载失败', description: resp.desc || '卸载失败' });
+          return;
+        }
+      }
       configStore.removeMountTarget(targetId);
       notification.success({ message: "已删除挂载" });
     };
@@ -1498,9 +1569,7 @@ export default defineComponent({
         if (ensure.source === 'downloaded') {
           notification.info({ message: '已自动下载挂载程序', description: '首次挂载会下载 rclone，完成后继续挂载' });
         }
-        return fuse.preMountCleanup(mountTarget).then(() => {
-          return fuse.mount(_.cloneDeep(toRaw(conn)), mountTarget, ensure.path || '');
-        });
+        return fuse.mount(_.cloneDeep(toRaw(conn)), mountTarget, ensure.path || '');
       }).then((resp) => {
         mountStates[target.id + '_loading'] = false;
         if (resp.success) {
@@ -1520,6 +1589,7 @@ export default defineComponent({
 
     const handleUmount = (conn: Connection, target: MountTarget) => {
       const label = target.pathPrefix ? `${target.bucket}/${target.pathPrefix}` : target.bucket;
+      mountStates[target.id + '_loading'] = true;
       fuse.umount(_.cloneDeep(toRaw(conn)), _.cloneDeep(toRaw(target))).then((resp) => {
         if (resp.success) {
           notification.success({ message: `${label} 卸载成功` });
@@ -1532,7 +1602,7 @@ export default defineComponent({
       }).catch((err) => {
         console.error('[MOUNT] 卸载异常:', err);
         notification.error({ message: `${label} 卸载失败` });
-      });
+      }).finally(() => { mountStates[target.id + '_loading'] = false; });
     };
 
     const handleSelectCacheDir = () => {
@@ -1544,7 +1614,7 @@ export default defineComponent({
     const handleCheckMounts = () => {
       for (const target of configStore.mountTargets) {
         if (target.mountPoint && target.mountPoint.length > 0) {
-          fuse.checkMount(target.mountPoint).then((state) => { mountStates[target.id] = state; })
+          getTargetRuntimeStatus(target).then((result) => { mountStates[target.id] = result.status === 'mounted'; })
             .catch(() => { mountStates[target.id] = false; });
         } else {
           mountStates[target.id] = false;
@@ -1562,8 +1632,6 @@ export default defineComponent({
         collapsedConnections.value = new Set(configStore.connections.map(conn => conn.id));
         handleDriveList();
         handleCheckMounts();
-        flashUploadEnabled.value = settingStore.flashUploadEnabled ?? true;
-        flashUploadThresholdMB.value = settingStore.flashUploadThresholdMB ?? 50;
         fuseBinValue.value = settingStore.fuseBin || '';
         defaultCacheDirectoryValue.value = settingStore.defaultCacheDirectory || '';
         defaultDownloadDirectoryValue.value = settingStore.defaultDownloadDirectory || '';
@@ -1579,11 +1647,9 @@ export default defineComponent({
     watch(() => connectionModalFormState.value.bucket, (val) => {
       if (!val) connectionModalFormState.value.pathPrefix = '';
     });
-    const intervalId = setInterval(handleCheckMounts, 5000);
     onMounted(() => {
       native.ipc('handler-updater', handleAboutUpdater);
     });
-    onUnmounted(() => clearInterval(intervalId));
 
     return {
       configStore, activeTab, tabs, endpointProtocol, drawerOpen,
@@ -1591,7 +1657,6 @@ export default defineComponent({
       updateChecking, updateDownloading, updateInstalling, updateProgress,
       updateAvailableVersion, updateDownloaded, updateStatusText,
       handleCheckUpdate, handleDownloadUpdate, handleInstallUpdate,
-      flashUploadEnabled, flashUploadThresholdMB,
       fuseBinValue, defaultCacheDirectoryValue, defaultPageSizeValue, defaultDownloadDirectoryValue,
       listLoadModeValue, transferConcurrencyValue, closeBehaviorValue, confirmBeforeExitValue, colorGroupIdValue,
       mountStates, isWindows, allBucketsCache, bucketFetching, availableDrives,
@@ -1600,7 +1665,7 @@ export default defineComponent({
       StringUtil, targetModalState, targetModalFormState,
       targetPathPrefixPlaceholder, targetPathPrefixWarning,
       existingGroupOptions, advancedConfigVisible, connectionTesting, handleTestConnection,
-      handleClose, handleFlashUploadEnabledChange, handleFlashUploadThresholdChange,
+      handleClose,
       handleSelectFuse, handleSelectDefaultCacheDirectory, handleSelectDefaultDownloadDirectory,
       collapsedConnections, toggleConnection,
       handleFuseBinChange, handleDefaultCacheDirectoryChange, handleDefaultDownloadDirectoryChange, handleDefaultPageSizeChange,
@@ -2253,6 +2318,7 @@ export default defineComponent({
     border-color: var(--ant-color-border-secondary) !important;
   }
   .form-warning { font-size: 11px; color: #d97706; margin-top: 2px; line-height: 14px; }
+  .form-inline-hint { font-size: 11px; color: var(--ant-color-text-tertiary); line-height: 16px; }
 }
 </style>
 

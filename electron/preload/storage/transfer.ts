@@ -3,6 +3,7 @@ import nodePath from "node:path";
 import nodeFs from "node:fs";
 import { TransferObjectOption, Storage, ProgressCallback, CancelFunction, Connection } from "../types";
 import PersistentQueue from "./PersistentQueue"
+import { decryptConnectionSecrets } from "../../common/secret-crypto";
 
 export interface TransferOptions extends TransferObjectOption {
   type: "download" | "upload";
@@ -16,6 +17,8 @@ export interface TransferOptions extends TransferObjectOption {
   forceOverwrite?: boolean;  // true for retry: delete partial file and override
   resumeFrom?: { filePath: string; downloaded: number; total: number };  // for resume download
 }
+
+type StorageFactory = () => Storage;
 
 const noop: any = () => false
 const DEFAULT_TRANSFER_CONCURRENCY = 3
@@ -66,18 +69,23 @@ function updateRecord(queue: PersistentQueue, job: any, status: string, errorDes
   if (!r) return;
   r.status = status;
   if (errorDesc) r.errorDesc = errorDesc;
-  r.completedAt = Date.now();
+  else if (status === 'running') delete r.errorDesc;
+  if (status === 'success' || status === 'error' || status === 'cancel') {
+    r.completedAt = Date.now();
+  } else {
+    delete r.completedAt;
+  }
   queue.upsertTransferRecord(r.uid, r);
 }
 
 export class Transfer {
   private transferQueue: PersistentQueue;
-  private storages: { [key: string]: Storage } = {};
+  private storages: { [key: string]: StorageFactory } = {};
   private eventBus: any;
   private pendingJobs: TransferOptions[] = [];
   private flushingPending = false;
 
-  constructor(storages: { [key: string]: Storage }, eventBus: any) {
+  constructor(storages: { [key: string]: StorageFactory }, eventBus: any) {
     this.storages = storages
     this.eventBus = eventBus
 
@@ -95,8 +103,8 @@ export class Transfer {
     this.transferQueue = new PersistentQueue(dbPath, resolveTransferConcurrency())
     this.transferQueue.setDebug(false)
     this.transferQueue.on("next", ({ id, job }) => {
-      const stor = this.storages[job.key || 'minio']
-      stor.changeConfig(job.connection || {})
+      const stor = this.storages[job.key || 'minio']()
+      stor.changeConfig(decryptConnectionSecrets(job.connection || {}))
       stor.setTarget(job.bucket || '', job.pathPrefix)
 
       // Clear any previous cancel mark for this uid when starting a new job
@@ -130,6 +138,9 @@ export class Transfer {
               this.transferQueue.addSucceeded(job)
               updateRecord(this.transferQueue, job, 'success');
             }
+            if (data.status == 'cancel') {
+              updateRecord(this.transferQueue, job, 'cancel', data.desc);
+            }
             this.eventBus.emit('download', {...data, ...job})
           },
           cancelFunc
@@ -152,6 +163,9 @@ export class Transfer {
             if (data.status == 'success') {
               this.transferQueue.addSucceeded(job)
               updateRecord(this.transferQueue, job, 'success');
+            }
+            if (data.status == 'cancel') {
+              updateRecord(this.transferQueue, job, 'cancel', data.desc);
             }
             this.eventBus.emit('upload', {...data, ...job})
           },
