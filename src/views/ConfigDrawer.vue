@@ -138,127 +138,66 @@
 
     <!-- 系统设置 -->
     <div v-if="activeTab === 'system'" class="drawer-content drawer-content-settings">
-      <div class="setting-section">
-        <div class="setting-section-head">
-          <div class="setting-section-title">路径与目录</div>
-          <div class="setting-section-desc">管理挂载程序、缓存位置和下载落点。</div>
-        </div>
-        <div class="setting-field">
-          <div class="setting-field-main">
-            <span class="setting-form-label">挂载程序</span>
-            <div class="setting-form-control">
-              <a-input v-model:value="fuseBinValue" size="small" placeholder="留空则首次挂载自动下载 rclone" @change="handleFuseBinChange" />
-              <a-button size="small" @click="handleSelectFuse">
-                <FolderOpenOutlined />
-              </a-button>
-            </div>
-          </div>
-          <div class="setting-desc">默认不内置 rclone。首次挂载会自动下载到用户目录，也可手动指定本地 rclone 路径。</div>
-        </div>
-        <div class="setting-field">
-          <div class="setting-field-main">
-            <span class="setting-form-label">默认缓存目录</span>
-            <div class="setting-form-control">
-              <a-input v-model:value="defaultCacheDirectoryValue" size="small" placeholder="未设置时使用系统临时目录" @change="handleDefaultCacheDirectoryChange" />
-              <a-button size="small" @click="handleSelectDefaultCacheDirectory">
-                <FolderOpenOutlined />
-              </a-button>
-            </div>
-          </div>
-          <div class="setting-desc">存储桶挂载时缓存路径的默认值，留空则使用系统临时目录。</div>
-        </div>
-        <div class="setting-field">
-          <div class="setting-field-main">
-            <span class="setting-form-label">默认下载目录</span>
-            <div class="setting-form-control">
-              <a-input v-model:value="defaultDownloadDirectoryValue" size="small" placeholder="未设置时每次下载需选择目录" @change="handleDefaultDownloadDirectoryChange" />
-              <a-button size="small" @click="handleSelectDefaultDownloadDirectory">
-                <FolderOpenOutlined />
-              </a-button>
-            </div>
-          </div>
-          <div class="setting-desc">指定后下载文件会直接使用此目录，不再弹出目录选择框。</div>
+      <div class="system-settings-intro">
+        <div>
+          <div class="system-settings-title">系统设置</div>
+          <div class="system-settings-desc">管理本机路径、传输方式和应用运行行为。</div>
         </div>
       </div>
 
-      <div class="setting-section">
-        <div class="setting-section-head">
-          <div class="setting-section-title">列表与传输</div>
-          <div class="setting-section-desc">控制文件列表呈现方式和后台任务并发。</div>
-        </div>
-        <div class="setting-field setting-field-inline">
-          <span class="setting-form-label">默认列表行数</span>
-          <div class="setting-form-control">
-            <a-select v-model:value="defaultPageSizeValue" size="small" class="setting-select-sm" @change="handleDefaultPageSizeChange">
-              <a-select-option :value="10">10 行/页</a-select-option>
-              <a-select-option :value="20">20 行/页</a-select-option>
-              <a-select-option :value="50">50 行/页</a-select-option>
-              <a-select-option :value="100">100 行/页</a-select-option>
-            </a-select>
-          </div>
-          <div class="setting-desc">文件列表每页默认显示的行数，可在列表页临时调整。</div>
-        </div>
-        <div class="setting-field setting-field-inline">
-          <span class="setting-form-label">列表加载模式</span>
-          <div class="setting-form-control">
-            <a-radio-group v-model:value="listLoadModeValue" size="small" @change="handleListLoadModeChange">
-              <a-radio-button value="waterfall">瀑布流</a-radio-button>
-              <a-radio-button value="pagination">翻页</a-radio-button>
-            </a-radio-group>
-          </div>
-          <div class="setting-desc">瀑布流通过滚动加载更多文件；翻页通过页码切换。</div>
-        </div>
-        <div class="setting-field setting-field-inline">
-          <span class="setting-form-label">传输并发数</span>
-          <div class="setting-form-control">
-            <a-select v-model:value="transferConcurrencyValue" size="small" class="setting-select-md" @change="handleTransferConcurrencyChange">
-              <a-select-option :value="1">1（串行）</a-select-option>
-              <a-select-option :value="2">2</a-select-option>
-              <a-select-option :value="3">3（推荐）</a-select-option>
-              <a-select-option :value="4">4</a-select-option>
-              <a-select-option :value="6">6</a-select-option>
-              <a-select-option :value="8">8</a-select-option>
-            </a-select>
-          </div>
-          <div class="setting-desc">重启应用后完全生效；值越大吞吐越高，也更吃带宽与 CPU。</div>
-        </div>
-      </div>
-
-      <div class="setting-section">
-        <div class="setting-section-head">
-          <div class="setting-section-title">行为与外观</div>
-          <div class="setting-section-desc">设置关闭行为、诊断入口和连接主题色。</div>
-        </div>
-        <div class="setting-field setting-field-inline">
-          <span class="setting-form-label">关闭主窗口时</span>
-          <div class="setting-form-control">
-            <a-radio-group v-model:value="closeBehaviorValue" size="small" @change="handleCloseBehaviorChange">
-              <a-radio-button value="hide">隐藏到任务栏</a-radio-button>
-              <a-radio-button value="exit">退出应用</a-radio-button>
-            </a-radio-group>
-          </div>
-          <div class="setting-desc">默认保留任务栏通知区域图标，后台传输、挂载等任务可继续运行。</div>
-        </div>
-        <div v-if="closeBehaviorValue === 'exit'" class="setting-row setting-sub-row">
+      <section class="system-setting-group">
+        <div class="system-setting-group-head">
+          <FolderOpenOutlined class="system-setting-group-icon" />
           <div>
-            <div class="setting-label">退出前显示影响提示</div>
-            <div class="setting-desc setting-desc-inline">关闭提醒后，可随时在这里重新开启。</div>
+            <div class="system-setting-group-title">路径与目录</div>
+            <div class="system-setting-group-desc">挂载程序、缓存和下载文件的本地位置。</div>
           </div>
-          <a-switch v-model:checked="confirmBeforeExitValue" size="small" @change="handleConfirmBeforeExitChange" />
         </div>
-        <div class="setting-field setting-field-inline">
-          <span class="setting-form-label">诊断日志</span>
-          <div class="setting-form-control">
-            <a-button size="small" @click="handleOpenLogDirectory">打开日志目录</a-button>
+        <div class="system-setting-list">
+          <div class="system-setting-row system-setting-row-path">
+            <div class="system-setting-copy"><div class="system-setting-label">挂载程序</div><div class="system-setting-desc">留空时首次挂载会自动下载 rclone。</div></div>
+            <div class="system-setting-control"><a-input v-model:value="fuseBinValue" size="small" placeholder="自动管理 rclone" @change="handleFuseBinChange" /><a-tooltip title="选择本地程序"><a-button size="small" @click="handleSelectFuse"><FolderOpenOutlined /></a-button></a-tooltip></div>
           </div>
-          <div class="setting-desc">用于排查崩溃、更新失败、传输异常等问题。日志仅保存在本机。</div>
+          <div class="system-setting-row system-setting-row-path">
+            <div class="system-setting-copy"><div class="system-setting-label">默认缓存目录</div><div class="system-setting-desc">留空时使用系统临时目录。</div></div>
+            <div class="system-setting-control"><a-input v-model:value="defaultCacheDirectoryValue" size="small" placeholder="系统临时目录" @change="handleDefaultCacheDirectoryChange" /><a-tooltip title="选择缓存目录"><a-button size="small" @click="handleSelectDefaultCacheDirectory"><FolderOpenOutlined /></a-button></a-tooltip></div>
+          </div>
+          <div class="system-setting-row system-setting-row-path">
+            <div class="system-setting-copy"><div class="system-setting-label">默认下载目录</div><div class="system-setting-desc">设置后下载不再询问保存位置。</div></div>
+            <div class="system-setting-control"><a-input v-model:value="defaultDownloadDirectoryValue" size="small" placeholder="每次选择目录" @change="handleDefaultDownloadDirectoryChange" /><a-tooltip title="选择下载目录"><a-button size="small" @click="handleSelectDefaultDownloadDirectory"><FolderOpenOutlined /></a-button></a-tooltip></div>
+          </div>
         </div>
-        <div class="setting-field setting-field-inline color-group-row">
-          <span class="setting-form-label">连接主题色组</span>
-          <div class="setting-form-control">
-            <a-button size="small" @click="handleCopyColorGroup">复制为自定义</a-button>
-          </div>
-          <div class="setting-desc">连接和标签页主题色会按当前色组循环分配，数量超过色号数量时允许重复。</div>
+      </section>
+
+      <section class="system-setting-group">
+        <div class="system-setting-group-head">
+          <HddOutlined class="system-setting-group-icon" />
+          <div><div class="system-setting-group-title">列表与传输</div><div class="system-setting-group-desc">控制文件浏览方式和后台传输负载。</div></div>
+        </div>
+        <div class="system-setting-list">
+          <div class="system-setting-row"><div class="system-setting-copy"><div class="system-setting-label">默认列表行数</div><div class="system-setting-desc">可在文件列表中临时调整。</div></div><div class="system-setting-control"><a-select v-model:value="defaultPageSizeValue" size="small" class="setting-select-sm" @change="handleDefaultPageSizeChange"><a-select-option :value="10">10 行/页</a-select-option><a-select-option :value="20">20 行/页</a-select-option><a-select-option :value="50">50 行/页</a-select-option><a-select-option :value="100">100 行/页</a-select-option></a-select></div></div>
+          <div class="system-setting-row"><div class="system-setting-copy"><div class="system-setting-label">列表加载模式</div><div class="system-setting-desc">瀑布流滚动加载；翻页按页切换。</div></div><div class="system-setting-control"><a-radio-group v-model:value="listLoadModeValue" size="small" @change="handleListLoadModeChange"><a-radio-button value="waterfall">瀑布流</a-radio-button><a-radio-button value="pagination">翻页</a-radio-button></a-radio-group></div></div>
+          <div class="system-setting-row"><div class="system-setting-copy"><div class="system-setting-label">传输并发数</div><div class="system-setting-desc">数值越高吞吐越高，也更占用带宽与 CPU。</div></div><div class="system-setting-control"><a-select v-model:value="transferConcurrencyValue" size="small" class="setting-select-md" @change="handleTransferConcurrencyChange"><a-select-option :value="1">1（串行）</a-select-option><a-select-option :value="2">2</a-select-option><a-select-option :value="3">3（推荐）</a-select-option><a-select-option :value="4">4</a-select-option><a-select-option :value="6">6</a-select-option><a-select-option :value="8">8</a-select-option></a-select></div></div>
+        </div>
+      </section>
+
+      <section class="system-setting-group">
+        <div class="system-setting-group-head">
+          <CloseSquareOutlined class="system-setting-group-icon" />
+          <div><div class="system-setting-group-title">应用行为与诊断</div><div class="system-setting-group-desc">关闭窗口后的运行方式，以及本地故障排查入口。</div></div>
+        </div>
+        <div class="system-setting-list">
+          <div class="system-setting-row"><div class="system-setting-copy"><div class="system-setting-label">关闭主窗口时</div><div class="system-setting-desc">隐藏后，传输和挂载仍可在后台继续运行。</div></div><div class="system-setting-control"><a-radio-group v-model:value="closeBehaviorValue" size="small" @change="handleCloseBehaviorChange"><a-radio-button value="hide">隐藏到任务栏</a-radio-button><a-radio-button value="exit">退出应用</a-radio-button></a-radio-group></div></div>
+          <div v-if="closeBehaviorValue === 'exit'" class="system-setting-row system-setting-row-secondary"><div class="system-setting-copy"><div class="system-setting-label">退出前显示影响提示</div><div class="system-setting-desc">关闭后可随时回到这里重新开启。</div></div><div class="system-setting-control system-setting-control-end"><a-switch v-model:checked="confirmBeforeExitValue" size="small" @change="handleConfirmBeforeExitChange" /></div></div>
+          <div class="system-setting-row"><div class="system-setting-copy"><div class="system-setting-label">诊断日志</div><div class="system-setting-desc">用于排查崩溃、更新和传输异常，日志仅保存在本机。</div></div><div class="system-setting-control"><a-button size="small" @click="handleOpenLogDirectory"><FolderOpenOutlined /> 打开目录</a-button></div></div>
+        </div>
+      </section>
+
+      <section class="system-setting-group system-setting-group-appearance">
+        <div class="system-setting-group-head">
+          <CheckCircleFilled class="system-setting-group-icon" />
+          <div><div class="system-setting-group-title">连接主题色</div><div class="system-setting-group-desc">连接和标签页会按色组循环分配颜色。</div></div>
+          <a-button size="small" class="system-setting-group-action" @click="handleCopyColorGroup">复制为自定义</a-button>
         </div>
         <div class="color-group-picker">
           <div
@@ -303,7 +242,7 @@
             </div>
           </div>
         </div>
-      </div>
+      </section>
     </div>
 
     <!-- 关于 -->
@@ -600,10 +539,19 @@
             <div class="mc-import-summary">
               <span>{{ item.connection.region || 'us-east-1' }}</span>
               <span>{{ item.connection.bucket ? (item.connection.pathPrefix ? `${item.connection.bucket}/${item.connection.pathPrefix}` : item.connection.bucket) : '全部 Bucket' }}</span>
-              <span>{{ item.connection.pathStyle ? 'PathStyle' : 'VirtualHost' }}</span>
             </div>
             <a-switch v-model:checked="item.connection.enabled" size="small" />
             <a-button size="small" @click="handleMcImportEditItem(item)">编辑</a-button>
+          </div>
+          <div class="mc-import-addressing">
+            <div class="mc-import-addressing-copy">
+              <span class="mc-import-addressing-provider">{{ item.addressing.provider }}</span>
+              <span class="mc-import-addressing-reason">{{ item.addressing.reason }}</span>
+            </div>
+            <a-radio-group v-model:value="item.connection.pathStyle" size="small">
+              <a-radio-button :value="true">Path Style</a-radio-button>
+              <a-radio-button :value="false">VirtualHost</a-radio-button>
+            </a-radio-group>
           </div>
         </div>
       </div>
@@ -785,6 +733,7 @@ import { FormInstance, notification } from 'ant-design-vue';
 import { defaultStorage, useConfigStore } from '../store/config';
 import { defaultConnectionColorGroups, useSettingStore } from '../store/setting';
 import StringUtil from '../common/stringUtil';
+import { inferS3Addressing, type S3AddressingAdvice } from '../common/s3Addressing';
 import _ from "lodash";
 
 const storage = (window as any).storage as PreloadStorage;
@@ -815,6 +764,7 @@ interface McImportItem {
   selected: boolean;
   protocol: 'http' | 'https';
   connection: Connection;
+  addressing: S3AddressingAdvice;
 }
 
 export default defineComponent({
@@ -1398,6 +1348,7 @@ export default defineComponent({
         for (const [alias, aliasConfig] of Object.entries(config.aliases) as [string, any][]) {
           if (!aliasConfig?.url || !aliasConfig?.accessKey || !aliasConfig?.secretKey) continue;
           const endpoint = normalizeMcEndpoint(aliasConfig.url);
+          const addressing = inferS3Addressing(endpoint.endpoint);
           const connectionId = ensureUniqueImportId(alias, usedIds);
           const connection: Connection = {
             id: connectionId,
@@ -1406,7 +1357,7 @@ export default defineComponent({
             accessKeySecret: aliasConfig.secretKey,
             region: 'us-east-1',
             useSSL: endpoint.useSSL,
-            pathStyle: String(aliasConfig.api || '').toLowerCase() === 's3v4',
+            pathStyle: addressing.pathStyle,
             bucket: '',
             pathPrefix: '',
             enabled: true,
@@ -1417,6 +1368,7 @@ export default defineComponent({
             selected: true,
             protocol: endpoint.protocol,
             connection,
+            addressing,
           });
         }
 
@@ -2331,243 +2283,50 @@ export default defineComponent({
   }
 }
 
-.setting-section {
-  border: 1px solid var(--ant-color-border-secondary);
-  border-radius: 8px;
-  background: var(--ant-color-bg-container);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
-  overflow: hidden;
-
-  .setting-section-head {
-    padding: 9px 12px 8px;
-    border-bottom: 1px solid var(--ant-color-border-secondary);
-    background: var(--ant-color-fill-quaternary);
-  }
-
-  .setting-section-title {
-    font-size: 13px;
-    line-height: 18px;
-    font-weight: 700;
-    color: var(--ant-color-text);
-  }
-
-  .setting-section-desc {
-    margin-top: 2px;
-    font-size: 11px;
-    line-height: 16px;
-    color: var(--ant-color-text-tertiary);
-  }
-
-  .setting-field {
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--ant-color-border-secondary);
-
-    &:last-child {
-      border-bottom: none;
-    }
-  }
-
-  .setting-field-main,
-  .setting-field-inline {
-    display: grid;
-    grid-template-columns: 92px minmax(0, 1fr);
-    align-items: center;
-    column-gap: 10px;
-  }
-
-  .setting-field-inline .setting-desc {
-    grid-column: 2;
-    grid-row: 2;
-    margin-top: 5px;
-  }
-
-  .setting-form-label {
-    font-size: 12px;
-    line-height: 24px;
-    font-weight: 500;
-    color: var(--ant-color-text-secondary);
-    white-space: nowrap;
-  }
-
-  .setting-form-control {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-
-    .ant-input,
-    .ant-input-affix-wrapper {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .ant-btn {
-      flex: 0 0 auto;
-    }
-  }
-
-  .setting-select-sm {
-    width: 108px;
-  }
-
-  .setting-select-md {
-    width: 128px;
-  }
-
-  .setting-desc {
-    margin: 0;
-    font-size: 11px;
-    line-height: 17px;
-    color: var(--ant-color-text-tertiary);
-    max-width: 360px;
-  }
-
-  .setting-field-main + .setting-desc {
-    margin-top: 6px;
-    margin-left: 102px;
-  }
-
-  .setting-sub-row {
-    margin: 0 12px 8px 102px;
-    padding: 8px 10px;
-    border: 1px solid var(--ant-color-border-secondary);
-    border-radius: 6px;
-    background: var(--ant-color-fill-quaternary);
-  }
-
-  .color-group-row {
-    align-items: start;
-    padding-bottom: 10px;
-  }
-
-  .color-group-picker {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    margin: 0 12px 12px 102px;
-    max-height: none;
-    overflow: visible;
-    padding-right: 0;
-  }
-
-  .color-group-card {
-    min-width: 0;
-    position: relative;
-    border: 1px solid var(--ant-color-border-secondary);
-    border-left: 2px solid transparent;
-    border-radius: 7px;
-    padding: 6px 6px 6px 8px;
-    background: var(--ant-color-bg-container);
-    cursor: pointer;
-    box-shadow: none;
-    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-
-    &:hover {
-      border-color: var(--ant-color-text-quaternary);
-      background: var(--ant-color-fill-tertiary);
-      transform: none;
-    }
-
-    &.color-group-card-active {
-      border-color: var(--ant-color-border-secondary) !important;
-      border-left-color: var(--ant-color-primary) !important;
-      background: var(--ant-color-bg-container) !important;
-      box-shadow: none !important;
-      transform: none;
-
-      .color-group-card-head {
-        padding-right: 0;
-      }
-
-      .color-group-name {
-        color: var(--ant-color-text);
-        font-weight: 600;
-      }
-
-      .color-group-strip {
-        border-color: rgba(0, 0, 0, 0.08);
-        box-shadow: none;
-      }
-
-      &:hover {
-        border-color: var(--ant-color-border-secondary) !important;
-        border-left-color: var(--ant-color-primary) !important;
-        background: var(--ant-color-fill-tertiary) !important;
-      }
-    }
-
-    &.color-group-card-active::after,
-    &.color-group-card-active::before {
-      content: none !important;
-      display: none !important;
-    }
-  }
-
-  .color-group-card-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    margin-bottom: 4px;
-
-    .color-group-title {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      min-width: 0;
-      flex: 1;
-    }
-
-    .color-group-check {
-      font-size: 12px;
-      line-height: 1;
-      color: var(--ant-color-primary);
-      flex-shrink: 0;
-    }
-
-    .color-group-name {
-      font-size: 11px;
-      line-height: 15px;
-      font-weight: 600;
-      color: var(--ant-color-text-secondary);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .color-group-tag {
-      font-size: 10px;
-      line-height: 14px;
-      color: var(--ant-color-text-tertiary);
-      background: var(--ant-color-fill-tertiary);
-      border-radius: 3px;
-      padding: 0 4px;
-      flex-shrink: 0;
-    }
-  }
-
-  .color-group-strip {
-    display: flex;
-    width: 100%;
-    height: 18px;
-    overflow: hidden;
-    border-radius: 5px;
-    border: 1px solid rgba(0, 0, 0, 0.08);
-
-    .color-strip-item {
-      flex: 1;
-      min-width: 0;
-    }
-  }
-
-  .color-group-editor {
-    margin: 0 12px 12px 102px;
-    padding: 10px;
-    border: 1px solid var(--ant-color-border-secondary);
-    border-radius: 6px;
-    background: var(--ant-color-bg-layout);
-  }
-}
+.system-settings-intro { padding: 14px 0 12px; border-bottom: 1px solid var(--ant-color-border-secondary); }
+.system-settings-title { color: var(--ant-color-text); font-size: 14px; font-weight: 600; line-height: 1.4; }
+.system-settings-desc { color: var(--ant-color-text-tertiary); font-size: 11px; line-height: 1.5; margin-top: 3px; }
+.system-setting-group { padding: 16px 0; border-bottom: 1px solid var(--ant-color-border-secondary); }
+.system-setting-group:last-child { border-bottom: none; padding-bottom: 8px; }
+.system-setting-group-head { display: flex; align-items: flex-start; gap: 9px; }
+.system-setting-group-icon { color: var(--ant-color-primary); font-size: 15px; line-height: 19px; flex-shrink: 0; }
+.system-setting-group-title { color: var(--ant-color-text); font-size: 13px; font-weight: 600; line-height: 1.45; }
+.system-setting-group-desc { color: var(--ant-color-text-tertiary); font-size: 11px; line-height: 1.45; margin-top: 2px; }
+.system-setting-group-action { margin-left: auto; flex-shrink: 0; }
+.system-setting-list { margin-top: 12px; border-top: 1px solid var(--ant-color-border-secondary); }
+.system-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 18px; padding: 11px 0; border-bottom: 1px solid var(--ant-color-border-secondary); }
+.system-setting-row:last-child { border-bottom: none; }
+.system-setting-row-path { align-items: start; }
+.system-setting-row-secondary { margin: -1px 0 0; padding: 10px; border: 1px solid var(--ant-color-border-secondary); border-radius: 6px; background: var(--ant-color-fill-quaternary); }
+.system-setting-copy { min-width: 0; }
+.system-setting-label { color: var(--ant-color-text-secondary); font-size: 12px; font-weight: 500; line-height: 1.45; }
+.system-setting-desc { color: var(--ant-color-text-tertiary); font-size: 11px; line-height: 1.45; margin-top: 2px; }
+.system-setting-control { display: flex; align-items: center; gap: 6px; min-width: 0; justify-content: flex-end; }
+.system-setting-control-end { justify-content: flex-end; }
+.system-setting-row-path .system-setting-control { width: 278px; }
+.system-setting-row-path .ant-input { min-width: 0; flex: 1; }
+.system-setting-control .ant-btn { display: inline-flex; align-items: center; gap: 4px; }
+.setting-select-sm { width: 108px; }
+.setting-select-md { width: 128px; }
+.system-setting-group-appearance .color-group-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 12px 0 0; }
+.system-setting-group-appearance .color-group-card { min-width: 0; border: 1px solid var(--ant-color-border-secondary); border-left: 2px solid transparent; border-radius: 6px; padding: 7px 8px; background: var(--ant-color-bg-container); cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+.system-setting-group-appearance .color-group-card:hover { background: var(--ant-color-fill-tertiary); border-color: var(--ant-color-text-quaternary); }
+.system-setting-group-appearance .color-group-card-active { border-left-color: var(--ant-color-primary); }
+.system-setting-group-appearance .color-group-card-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 5px; }
+.system-setting-group-appearance .color-group-title { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.system-setting-group-appearance .color-group-check { color: var(--ant-color-primary); font-size: 12px; }
+.system-setting-group-appearance .color-group-name { color: var(--ant-color-text-secondary); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.system-setting-group-appearance .color-group-tag { color: var(--ant-color-text-tertiary); background: var(--ant-color-fill-tertiary); border-radius: 3px; font-size: 10px; padding: 1px 4px; }
+.system-setting-group-appearance .color-group-strip { display: flex; height: 18px; overflow: hidden; border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 4px; }
+.system-setting-group-appearance .color-strip-item { flex: 1; min-width: 0; }
+.system-setting-group-appearance .color-group-editor { margin: 10px 0 0; padding: 10px; border: 1px solid var(--ant-color-border-secondary); border-radius: 6px; background: var(--ant-color-bg-layout); }
+.system-setting-group-appearance .color-group-editor-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.system-setting-group-appearance .color-editor-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(142px, 1fr)); gap: 6px; }
+.system-setting-group-appearance .color-editor-item { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.system-setting-group-appearance .color-picker-input { width: 26px; height: 24px; padding: 0; border: 1px solid var(--ant-color-border); border-radius: 4px; background: transparent; cursor: pointer; }
+.system-setting-group-appearance .color-hex-input { min-width: 0; flex: 1; font-size: 11px; }
+.system-setting-group-appearance .color-editor-item .ant-btn { width: 22px; height: 22px; padding: 0; color: var(--ant-color-text-tertiary); }
+.system-setting-group-appearance .color-editor-item .ant-btn:hover { color: #ef4444; background: rgba(239, 68, 68, 0.1); }
 
 .ant-drawer-body {
   .ant-input,
@@ -2673,6 +2432,13 @@ export default defineComponent({
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; min-width: 180px;
     span { font-size: 11px; color: var(--ant-color-text-secondary); background: var(--ant-color-fill-tertiary); border-radius: 4px; padding: 2px 6px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   }
+  .mc-import-addressing {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ant-color-border-secondary);
+  }
+  .mc-import-addressing-copy { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .mc-import-addressing-provider { color: var(--ant-color-text-secondary); font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .mc-import-addressing-reason { min-width: 0; overflow: hidden; color: var(--ant-color-text-tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .mc-import-addressing .ant-radio-group { flex-shrink: 0; }
 }
 .ant-popconfirm { .ant-popconfirm-buttons { .ant-btn-primary { background: #b91c1c; border-color: #b91c1c; &:hover { background: #dc2626; border-color: #dc2626; } } } }
 </style>
