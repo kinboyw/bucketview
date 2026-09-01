@@ -80,6 +80,8 @@ export interface Connection {
   enabled?: boolean;
   /** 可选：连接所属的分组名称，用于在侧边栏分类显示 */
   group?: string;
+  /** 分享导入的连接只能使用，不能在界面中查看或编辑 Secret Key */
+  readonly?: boolean;
 }
 
 export interface MountTarget {
@@ -166,13 +168,14 @@ export interface PreloadNative {
   pathBasename: (path: string) => string;
   pathDirname: (path: string) => string;
   writeClipboard: (s: string) => void;
+  createConnectionShare: (connection: Connection, readonly?: boolean) => string;
+  parseConnectionShare: (share: string) => { success: boolean; connection?: Connection; message?: string };
   osType: () => string;
   openDevTools: () => void;
   openLocalFolder: (path: string) => void;
   showLocalFile: (path: string) => void;
   pathJoin: (...parts: string[]) => string;
   localFileSize: (path: string) => number | null;
-  availableDriveLetters: () => string[];
   resolveUniquePath: (localPath: string) => string;
   fuseBin: () => string;
   ensureRclone: (preferredPath?: string) => Promise<{ success: boolean; path?: string; message?: string; source?: string }>;
@@ -411,6 +414,7 @@ export interface VfsRefreshVerifiedResult {
 
 export interface PreloadFuse {
   checkMount: (mountpoint: string | undefined, retry?: number) => Promise<boolean>;
+  availableDriveLetters: () => string[];
   getMountStatus: (mountTarget: MountTarget) => Promise<FuseMountStatusResponse>;
   syncAutoMount: (connection: Connection, mountTarget: MountTarget) => Promise<void>;
   driveList: () => Promise<string[]>;

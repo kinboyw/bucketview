@@ -27,6 +27,7 @@ import nodeOs from 'node:os';
 import { Platform } from '../common';
 import { ensureRcloneBinary, managedRclonePath, bundledRclonePath } from '../common/rclone-bin'
 import { decryptSecret as decryptSecretValue, encryptSecret as encryptSecretValue } from '../common/secret-crypto';
+import { createConnectionShare, parseConnectionShare } from '../common/connection-share';
 import fse from 'fs-extra';
 import { stat } from 'original-fs';
 import { constant } from 'lodash';
@@ -251,6 +252,12 @@ contextBridge.exposeInMainWorld('native', {
   },
   writeClipboard(s: string): void {
     clipboard.writeText(s, 'selection');
+  },
+  createConnectionShare(connection: Connection): string {
+    return createConnectionShare(connection);
+  },
+  parseConnectionShare(share: string): { success: boolean; connection?: Connection; message?: string } {
+    return parseConnectionShare(share);
   },
   osType(): string {
     return nodeOs.type();

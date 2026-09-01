@@ -26,11 +26,17 @@
     <div v-if="activeTab === 'bucket'" class="drawer-content drawer-content-bucket">
       <div class="connection-list">
         <div v-for="conn in configStore.connections" :key="conn.id" class="connection-card">
-          <div class="connection-card-header" @click="toggleConnection(conn.id)">
+          <div
+            class="connection-card-header"
+            :class="{ 'connection-card-header-static': !hasConnectionTargets(conn) }"
+            @click="hasConnectionTargets(conn) && toggleConnection(conn.id)"
+          >
             <div class="connection-card-info">
-              <span class="expand-icon"><CaretDownOutlined v-if="!collapsedConnections.has(conn.id)" /><CaretRightOutlined v-else /></span>
+              <span v-if="hasConnectionTargets(conn)" class="expand-icon"><CaretDownOutlined v-if="!collapsedConnections.has(conn.id)" /><CaretRightOutlined v-else /></span>
+              <span v-else class="expand-icon expand-icon-placeholder"></span>
               <CloudServerOutlined class="connection-icon" />
               <span class="connection-card-name" :class="{ 'connection-disabled': conn.enabled === false }">{{ conn.id }}</span>
+              <span v-if="conn.readonly" class="readonly-badge"><LockOutlined /> 只读</span>
               <span class="connection-card-endpoint">{{ conn.endpoint }}</span>
             </div>
             <div class="connection-card-actions">
@@ -40,8 +46,11 @@
               <a-tooltip title="添加挂载"><a-button type="text" size="small" @click.stop="handleAddTarget(conn)">
                 <PlusOutlined />
               </a-button></a-tooltip>
-              <a-tooltip title="编辑"><a-button type="text" size="small" @click.stop="handleEditConnection(conn)">
+              <a-tooltip :title="conn.readonly ? '只读连接不可编辑' : '编辑'"><a-button type="text" size="small" :disabled="conn.readonly" @click.stop="handleEditConnection(conn)">
                 <FormOutlined />
+              </a-button></a-tooltip>
+              <a-tooltip title="分享连接"><a-button type="text" size="small" @click.stop="handleShareConnection(conn)">
+                <ShareAltOutlined />
               </a-button></a-tooltip>
               <a-popconfirm title="确定删除此连接及其所有挂载？" placement="left" @confirm="handleDeleteConnection(conn.id)">
                 <a-tooltip title="删除"><a-button type="text" size="small" class="action-danger" @click.stop>
@@ -103,6 +112,9 @@
         </div>
         <div class="add-btn-row" @click="mcImportVisible = true">
           <ImportOutlined /> 导入 MC Config
+        </div>
+        <div class="add-btn-row" @click="shareImportVisible = true">
+          <ImportOutlined /> 导入分享连接
         </div>
       </div>
     </div>
@@ -571,6 +583,57 @@
       </div>
     </a-modal>
 
+    <!-- 分享连接 Modal -->
+    <a-modal
+      v-model:open="shareModalState.visible"
+      title="分享连接"
+      width="560px"
+      :footer="null"
+    >
+      <a-alert
+        type="warning"
+        show-icon
+        message="请把完整地址当作密码传递"
+        description="默认仅允许使用连接，不会在导入端显示或允许编辑 Secret Key。"
+        style="margin-bottom: 12px"
+      />
+      <div class="share-mode-row">
+        <a-checkbox v-model:checked="shareReadonly">导入后仅允许使用，不允许查看或编辑连接配置</a-checkbox>
+      </div>
+      <a-textarea :value="shareModalState.shareText" :rows="6" readonly />
+      <div class="share-modal-actions">
+        <span class="share-connection-name">{{ shareModalState.connectionName }}</span>
+        <a-button type="primary" size="small" @click="handleCopyConnectionShare"><CopyOutlined /> 复制分享地址</a-button>
+      </div>
+    </a-modal>
+
+    <!-- 导入分享连接 Modal -->
+    <a-modal
+      v-model:open="shareImportVisible"
+      title="导入分享连接"
+      width="560px"
+      :ok-button-props="{ disabled: !shareImportPreview }"
+      ok-text="导入连接"
+      cancel-text="取消"
+      @ok="handleImportConnectionShare"
+      @cancel="handleShareImportCancel"
+    >
+      <a-textarea
+        v-model:value="shareImportText"
+        :rows="6"
+        placeholder="粘贴 BucketView 连接分享地址"
+        @change="parseConnectionShareText"
+      />
+      <a-alert
+        v-if="shareImportPreview"
+        type="success"
+        show-icon
+        message="分享地址校验成功"
+        :description="`${shareImportPreview.id} · ${shareImportPreview.useSSL ? 'https://' : 'http://'}${shareImportPreview.endpoint}${shareImportPreview.bucket ? ` · ${shareImportPreview.bucket}${shareImportPreview.pathPrefix ? `/${shareImportPreview.pathPrefix}` : ''}` : ''}`"
+        style="margin-top: 12px"
+      />
+    </a-modal>
+
     <!-- 添加挂载 Modal -->
     <a-modal
       :open="targetModalState.visible"
@@ -676,6 +739,9 @@ import {
   CaretDownOutlined,
   CaretRightOutlined,
   CheckCircleFilled,
+  ShareAltOutlined,
+  LockOutlined,
+  CopyOutlined,
 } from '@ant-design/icons-vue';
 import { Connection, ConnectionColorGroup, MountTarget, PreloadStorage, PreloadNative, PreloadFuse, UpdaterResponse } from '../../electron/preload/types';
 import { FormInstance, notification } from 'ant-design-vue';
@@ -715,7 +781,7 @@ interface McImportItem {
 }
 
 export default defineComponent({
-  components: { PlusOutlined, ImportOutlined, DeleteOutlined, FormOutlined, FolderOpenOutlined, PlayCircleOutlined, CloseSquareOutlined, DownOutlined, RightOutlined, CloudServerOutlined, HddOutlined, CaretDownOutlined, CaretRightOutlined, CheckCircleFilled },
+  components: { PlusOutlined, ImportOutlined, DeleteOutlined, FormOutlined, FolderOpenOutlined, PlayCircleOutlined, CloseSquareOutlined, DownOutlined, RightOutlined, CloudServerOutlined, HddOutlined, CaretDownOutlined, CaretRightOutlined, CheckCircleFilled, ShareAltOutlined, LockOutlined, CopyOutlined },
   props: {
     open: { type: Boolean, default: undefined },
     visible: { type: Boolean, default: false },
@@ -749,6 +815,8 @@ export default defineComponent({
       else newSet.add(id);
       collapsedConnections.value = newSet;
     };
+
+    const hasConnectionTargets = (conn: Connection) => configStore.targetsByConnectionId(conn.id).length > 0;
 
     const tabs = [
       { key: 'bucket', label: '连接' },
@@ -967,6 +1035,25 @@ export default defineComponent({
     const advancedConfigVisible = ref(false);
     const connectionTesting = ref(false);
 
+    const shareModalState = reactive({
+      visible: false,
+      connectionName: '',
+      shareText: '',
+    });
+    const shareReadonly = ref(true);
+    const shareSourceConnection = ref<Connection | null>(null);
+    const shareImportVisible = ref(false);
+    const shareImportText = ref('');
+    const shareImportPreview = ref<Connection | null>(null);
+
+    const refreshShareText = () => {
+      if (!shareSourceConnection.value) return;
+      shareModalState.shareText = native.createConnectionShare(
+        _.cloneDeep(toRaw(shareSourceConnection.value)),
+        shareReadonly.value,
+      );
+    };
+
     const handleTestConnection = async () => {
       try {
         await connectionModalFormRef.value?.validateFields();
@@ -990,6 +1077,70 @@ export default defineComponent({
         connectionTesting.value = false;
       }
     };
+
+    const handleShareConnection = (conn: Connection) => {
+      try {
+        shareModalState.connectionName = conn.id;
+        shareSourceConnection.value = _.cloneDeep(toRaw(conn));
+        shareReadonly.value = true;
+        refreshShareText();
+        shareModalState.visible = true;
+      } catch (err: any) {
+        notification.error({ message: '生成分享地址失败', description: err?.message || String(err) });
+      }
+    };
+
+    const handleCopyConnectionShare = () => {
+      if (!shareModalState.shareText) return;
+      refreshShareText();
+      native.writeClipboard(shareModalState.shareText);
+      notification.success({ message: '分享地址已复制' });
+    };
+
+    const parseConnectionShareText = () => {
+      shareImportPreview.value = null;
+      const text = shareImportText.value.trim();
+      if (!text) return;
+      const result = native.parseConnectionShare(text);
+      if (result.success && result.connection) {
+        shareImportPreview.value = result.connection;
+      }
+    };
+
+    const handleImportConnectionShare = () => {
+      const text = shareImportText.value.trim();
+      const result = native.parseConnectionShare(text);
+      if (!result.success || !result.connection) {
+        notification.error({ message: '导入失败', description: result.message || '分享地址无效' });
+        return;
+      }
+
+      const source = result.connection;
+      const nameBase = source.id.trim() || '共享连接';
+      let id = nameBase;
+      let index = 2;
+      while (configStore.getConnectionById(id)) {
+        id = `${nameBase} (${index++})`;
+      }
+      const connection: Connection = {
+        ...source,
+        id,
+        enabled: true,
+        readonly: source.readonly === true,
+      };
+      configStore.addConnection(connection);
+      if (!configStore.activeConnectionId) configStore.setActiveConnection(connection.id);
+      notification.success({ message: connection.readonly ? '导入只读连接成功' : '导入分享连接成功', description: connection.id });
+      handleShareImportCancel();
+    };
+
+    const handleShareImportCancel = () => {
+      shareImportVisible.value = false;
+      shareImportText.value = '';
+      shareImportPreview.value = null;
+    };
+
+    watch(shareReadonly, refreshShareText);
 
     // 挂载 Modal
     const targetModalFormState = ref({ bucket: '', pathPrefix: '', mountPoint: '', cacheDirectory: '', autoMount: false });
@@ -1298,6 +1449,10 @@ export default defineComponent({
     };
 
     const handleEditConnection = async (conn: Connection) => {
+      if (conn.readonly) {
+        notification.warning({ message: '只读连接不可编辑', description: '该连接由分享地址导入，不能查看或修改 Secret Key' });
+        return;
+      }
       const targets = configStore.targetsByConnectionId(conn.id);
       if (await hasActiveMount(targets)) {
         notification.warning({ message: '请先卸载挂载', description: '连接配置正在被挂载使用，不能直接修改凭据或 Endpoint' });
@@ -1356,7 +1511,7 @@ export default defineComponent({
     const applyAvailableDrives = (occupied: string[], editingMountPoint?: string) => {
       const excluded = excludedDriveLetters(editingMountPoint);
       const occupiedSet = new Set(occupied.map(drive => drive.toUpperCase()));
-      const localFree = native.availableDriveLetters();
+      const localFree = fuse.availableDriveLetters();
       availableDrives.value = localFree.length === 0 ? [] : defaultDrives.filter((drive) =>
         !occupiedSet.has(drive) && !excluded.has(drive) && localFree.includes(drive),
       );
@@ -1667,7 +1822,7 @@ export default defineComponent({
       existingGroupOptions, advancedConfigVisible, connectionTesting, handleTestConnection,
       handleClose,
       handleSelectFuse, handleSelectDefaultCacheDirectory, handleSelectDefaultDownloadDirectory,
-      collapsedConnections, toggleConnection,
+      collapsedConnections, toggleConnection, hasConnectionTargets,
       handleFuseBinChange, handleDefaultCacheDirectoryChange, handleDefaultDownloadDirectoryChange, handleDefaultPageSizeChange,
       handleListLoadModeChange, handleTransferConcurrencyChange, handleCloseBehaviorChange, handleConfirmBeforeExitChange, handleOpenLogDirectory, connectionColorGroups, activeCustomColorGroup,
       normalizeHexColor, handleConnectionColorGroupChange, handleCopyColorGroup, syncActiveCustomColorGroup,
@@ -1677,6 +1832,8 @@ export default defineComponent({
       handleMcImport, handleMcImportFile, handleMcImportParse, handleMcImportSelectAll, handleMcImportCancel,
       handleMcImportEditItem,
       handleAddConnection, handleEditConnection, handleConnectionModalOk, handleConnectionModalCancel, handleDeleteConnection,
+      shareModalState, shareReadonly, handleShareConnection, handleCopyConnectionShare,
+      shareImportVisible, shareImportText, shareImportPreview, parseConnectionShareText, handleImportConnectionShare, handleShareImportCancel,
       handleAddTarget, handleTargetModalOk, handleDeleteTarget, handleTargetEnableChange,
       handleConnectionEnableChange, handleEditTarget,
       handleOpenLocalFolder, handleMount, handleUmount, handleSelectCacheDir,
@@ -1778,11 +1935,13 @@ export default defineComponent({
   &:not(:last-child) { border-bottom: 1px solid rgba(128, 128, 128, 0.2); padding-bottom: 6px; margin-bottom: 6px; }
   .connection-card-header {
     display: flex; align-items: center; justify-content: space-between; padding: 10px 4px; background: transparent; border-bottom: none; cursor: pointer; transition: background 0.2s, border-radius 0.2s;
+    &.connection-card-header-static { cursor: default; }
     &:hover { background: var(--ant-color-fill-tertiary); border-radius: 6px; }
     .connection-card-info { display: flex; align-items: center; gap: 10px;
       .expand-icon { font-size: 10px; color: var(--ant-color-text-tertiary); transition: color 0.2s; display: flex; align-items: center; width: 12px; }
       .connection-icon { font-size: 16px; color: var(--ant-color-primary); }
       .connection-card-name { font-size: 14px; font-weight: 600; color: var(--ant-color-text); letter-spacing: 0.5px; &.connection-disabled { color: var(--ant-color-text-tertiary); } }
+      .readonly-badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border: 1px solid var(--ant-color-border-secondary); border-radius: 4px; color: var(--ant-color-text-secondary); font-size: 10px; line-height: 1.4; flex-shrink: 0; }
       .connection-card-endpoint { font-size: 11px; color: var(--ant-color-text-tertiary); margin-left: 6px; }
     }
     .connection-card-actions {
@@ -1795,6 +1954,9 @@ export default defineComponent({
     }
   }
 }
+.share-modal-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.share-connection-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ant-color-text-secondary); font-size: 12px; }
+.share-mode-row { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--ant-color-border-secondary); border-radius: 6px; background: var(--ant-color-fill-quaternary); }
 .target-list { padding: 2px 4px 8px 38px; display: flex; flex-direction: column; gap: 2px; background: transparent; position: relative;
 }
 
