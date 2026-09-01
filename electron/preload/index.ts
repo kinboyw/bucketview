@@ -253,10 +253,10 @@ contextBridge.exposeInMainWorld('native', {
   writeClipboard(s: string): void {
     clipboard.writeText(s, 'selection');
   },
-  createConnectionShare(connection: Connection): string {
-    return createConnectionShare(connection);
+  createConnectionShare(connection: Connection, readonly = true, expiresAt?: number): string {
+    return createConnectionShare(connection, readonly, expiresAt);
   },
-  parseConnectionShare(share: string): { success: boolean; connection?: Connection; message?: string } {
+  parseConnectionShare(share: string): { success: boolean; connection?: Connection; expiresAt?: number; message?: string } {
     return parseConnectionShare(share);
   },
   osType(): string {

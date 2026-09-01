@@ -168,8 +168,8 @@ export interface PreloadNative {
   pathBasename: (path: string) => string;
   pathDirname: (path: string) => string;
   writeClipboard: (s: string) => void;
-  createConnectionShare: (connection: Connection, readonly?: boolean) => string;
-  parseConnectionShare: (share: string) => { success: boolean; connection?: Connection; message?: string };
+  createConnectionShare: (connection: Connection, readonly?: boolean, expiresAt?: number) => string;
+  parseConnectionShare: (share: string) => { success: boolean; connection?: Connection; expiresAt?: number; message?: string };
   osType: () => string;
   openDevTools: () => void;
   openLocalFolder: (path: string) => void;

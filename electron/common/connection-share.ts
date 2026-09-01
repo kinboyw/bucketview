@@ -26,7 +26,10 @@ const validateConnection = (value: unknown): value is Connection => {
  * Create an opaque share address. Possession of the complete address grants
  * access to the credentials, so it must be handled like a password.
  */
-export function createConnectionShare(connection: Connection, readonly = true): string {
+export function createConnectionShare(connection: Connection, readonly = true, expiresAt?: number): string {
+  if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) {
+    throw new Error('分享有效期必须是未来时间');
+  }
   const key = nodeCrypto.randomBytes(32);
   const iv = nodeCrypto.randomBytes(12);
   const cipher = nodeCrypto.createCipheriv('aes-256-gcm', key, iv);
@@ -35,6 +38,7 @@ export function createConnectionShare(connection: Connection, readonly = true): 
   const payload = JSON.stringify({
     version: 1,
     readonly,
+    ...(expiresAt === undefined ? {} : { expiresAt }),
     connection: {
       ...connection,
       accessKeySecret: decryptSecret(connection.accessKeySecret || ''),
@@ -71,13 +75,17 @@ export function parseConnectionShare(input: string): { success: boolean; connect
     decipher.setAAD(SHARE_AAD);
     decipher.setAuthTag(tag);
     const plaintext = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
-    const payload = JSON.parse(plaintext) as { version?: number; readonly?: boolean; connection?: unknown };
-    if (payload.version !== 1 || typeof payload.readonly !== 'boolean' || !validateConnection(payload.connection)) {
+    const payload = JSON.parse(plaintext) as { version?: number; readonly?: boolean; expiresAt?: number; connection?: unknown };
+    if (payload.version !== 1 || typeof payload.readonly !== 'boolean' || (payload.expiresAt !== undefined && (!Number.isFinite(payload.expiresAt) || payload.expiresAt <= 0)) || !validateConnection(payload.connection)) {
       return { success: false, message: '分享地址内容无效' };
+    }
+    if (payload.expiresAt !== undefined && payload.expiresAt <= Date.now()) {
+      return { success: false, message: `分享地址已于 ${new Date(payload.expiresAt).toLocaleString()} 过期` };
     }
 
     return {
       success: true,
+      ...(payload.expiresAt === undefined ? {} : { expiresAt: payload.expiresAt }),
       connection: {
         ...payload.connection,
         readonly: payload.readonly,

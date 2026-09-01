@@ -24,6 +24,28 @@
 
     <!-- 连接配置 -->
     <div v-if="activeTab === 'bucket'" class="drawer-content drawer-content-bucket">
+      <div class="connection-toolbar">
+        <div class="connection-toolbar-copy">
+          <div class="connection-toolbar-title">连接配置</div>
+          <div class="connection-toolbar-desc">{{ configStore.connections.length }} 个连接</div>
+        </div>
+        <div class="connection-toolbar-actions">
+          <a-button type="primary" size="small" @click="handleAddConnection">
+            <PlusOutlined /> 添加连接
+          </a-button>
+          <a-dropdown :trigger="['click']">
+            <a-button size="small" title="导入连接">
+              <ImportOutlined /> 导入 <DownOutlined />
+            </a-button>
+            <template #overlay>
+              <a-menu @click="handleImportMenuClick">
+                <a-menu-item key="mc"><ImportOutlined /> 导入 MC Config</a-menu-item>
+                <a-menu-item key="share"><ImportOutlined /> 导入分享连接</a-menu-item>
+              </a-menu>
+            </template>
+          </a-dropdown>
+        </div>
+      </div>
       <div class="connection-list">
         <div v-for="conn in configStore.connections" :key="conn.id" class="connection-card">
           <div
@@ -33,11 +55,18 @@
           >
             <div class="connection-card-info">
               <span v-if="hasConnectionTargets(conn)" class="expand-icon"><CaretDownOutlined v-if="!collapsedConnections.has(conn.id)" /><CaretRightOutlined v-else /></span>
-              <span v-else class="expand-icon expand-icon-placeholder"></span>
               <CloudServerOutlined class="connection-icon" />
-              <span class="connection-card-name" :class="{ 'connection-disabled': conn.enabled === false }">{{ conn.id }}</span>
-              <span v-if="conn.readonly" class="readonly-badge"><LockOutlined /> 只读</span>
-              <span class="connection-card-endpoint">{{ conn.endpoint }}</span>
+              <div class="connection-card-copy">
+                <div class="connection-card-name-row">
+                  <span class="connection-card-name" :class="{ 'connection-disabled': conn.enabled === false }">{{ conn.id }}</span>
+                  <span v-if="conn.readonly" class="readonly-badge"><LockOutlined /> 只读</span>
+                </div>
+                <div class="connection-card-meta">
+                  <span class="connection-card-endpoint" :title="conn.endpoint">{{ conn.useSSL ? 'https://' : 'http://' }}{{ conn.endpoint }}</span>
+                  <span class="connection-card-scope">{{ connectionScopeLabel(conn) }}</span>
+                  <span v-if="connectionTargetCount(conn)" class="connection-card-target-count">{{ connectionTargetCount(conn) }} 个挂载</span>
+                </div>
+              </div>
             </div>
             <div class="connection-card-actions">
               <span class="config-enable-switch" @click.stop>
@@ -46,22 +75,22 @@
               <a-tooltip title="添加挂载"><a-button type="text" size="small" @click.stop="handleAddTarget(conn)">
                 <PlusOutlined />
               </a-button></a-tooltip>
-              <a-tooltip :title="conn.readonly ? '只读连接不可编辑' : '编辑'"><a-button type="text" size="small" :disabled="conn.readonly" @click.stop="handleEditConnection(conn)">
-                <FormOutlined />
-              </a-button></a-tooltip>
-              <a-tooltip title="分享连接"><a-button type="text" size="small" @click.stop="handleShareConnection(conn)">
-                <ShareAltOutlined />
-              </a-button></a-tooltip>
-              <a-popconfirm title="确定删除此连接及其所有挂载？" placement="left" @confirm="handleDeleteConnection(conn.id)">
-                <a-tooltip title="删除"><a-button type="text" size="small" class="action-danger" @click.stop>
-                  <DeleteOutlined />
-                </a-button></a-tooltip>
-              </a-popconfirm>
+              <a-dropdown :trigger="['click']">
+                <a-tooltip title="更多操作"><a-button type="text" size="small" @click.stop><MoreOutlined /></a-button></a-tooltip>
+                <template #overlay>
+                  <a-menu @click="(event: { key: string | number }) => handleConnectionMenuClick(event, conn)">
+                    <a-menu-item key="edit" :disabled="conn.readonly"><FormOutlined /> 编辑连接</a-menu-item>
+                    <a-menu-item key="share" :disabled="conn.readonly"><ShareAltOutlined /> 分享连接</a-menu-item>
+                    <a-menu-divider />
+                    <a-menu-item key="delete" class="menu-item-danger"><DeleteOutlined /> 删除连接</a-menu-item>
+                  </a-menu>
+                </template>
+              </a-dropdown>
             </div>
           </div>
 
           <!-- 挂载目标列表 -->
-          <div class="target-list" v-show="!collapsedConnections.has(conn.id)">
+          <div v-if="hasConnectionTargets(conn) && !collapsedConnections.has(conn.id)" class="target-list">
             <div v-for="target in configStore.targetsByConnectionId(conn.id)" :key="target.id" class="target-card">
               <div class="target-card-info">
                 <div class="target-card-name-row">
@@ -104,18 +133,6 @@
         </div>
 
         <a-empty v-if="configStore.connections.length === 0" description="暂无存储配置" class="drawer-empty" />
-      </div>
-
-      <div class="drawer-footer-actions">
-        <div class="add-btn-row" @click="handleAddConnection">
-          <PlusOutlined /> 添加连接
-        </div>
-        <div class="add-btn-row" @click="mcImportVisible = true">
-          <ImportOutlined /> 导入 MC Config
-        </div>
-        <div class="add-btn-row" @click="shareImportVisible = true">
-          <ImportOutlined /> 导入分享连接
-        </div>
       </div>
     </div>
 
@@ -387,12 +404,12 @@
     <!-- 添加/编辑连接 Modal -->
     <a-modal
       :open="connectionModalState.visible"
-      width="480px"
+      width="540px"
       :title="connectionModalTitle"
       @cancel="handleConnectionModalCancel"
     >
       <template #footer>
-        <a-button @click="connectionModalState.visible = false">取消</a-button>
+        <a-button @click="handleConnectionModalCancel">取消</a-button>
         <a-button :loading="connectionTesting" @click="handleTestConnection">测试连接</a-button>
         <a-button type="primary" @click="handleConnectionModalOk">提交</a-button>
       </template>
@@ -403,6 +420,10 @@
         name="connectionModalForm"
         class="compact-form"
       >
+        <div class="connection-form-section">
+          <div class="connection-form-section-title">基本信息</div>
+          <div class="connection-form-section-desc">设置连接名称和对象存储服务地址。</div>
+        </div>
         <div class="compact-row">
           <a-form-item
             name="id"
@@ -465,6 +486,10 @@
         >
           <a-input v-model:value="connectionModalFormState.region" placeholder="例如: us-east-1" size="small" />
         </a-form-item>
+        <div class="connection-form-section connection-form-section-spaced">
+          <div class="connection-form-section-title">认证信息</div>
+          <div class="connection-form-section-desc">密钥仅保存在本地，用于访问对应的对象存储服务。</div>
+        </div>
         <div class="compact-row">
           <a-form-item
             name="accessKeyId"
@@ -484,8 +509,9 @@
             <a-input-password v-model:value="connectionModalFormState.accessKeySecret" placeholder="访问密钥密码" size="small" />
           </a-form-item>
         </div>
-        <div class="advanced-config-toggle" @click="advancedConfigVisible = !advancedConfigVisible">
-          <span>高级配置选项</span>
+        <div class="advanced-config-toggle" :class="{ 'advanced-config-toggle-active': advancedConfigVisible }" @click="advancedConfigVisible = !advancedConfigVisible">
+          <span>访问范围（可选）</span>
+          <span class="advanced-config-summary">{{ connectionModalFormState.bucket ? (connectionModalFormState.pathPrefix ? `${connectionModalFormState.bucket}/${connectionModalFormState.pathPrefix}` : connectionModalFormState.bucket) : '全部 Bucket' }}</span>
           <DownOutlined v-if="advancedConfigVisible" class="toggle-icon" />
           <RightOutlined v-else class="toggle-icon" />
         </div>
@@ -600,6 +626,15 @@
       <div class="share-mode-row">
         <a-checkbox v-model:checked="shareReadonly">导入后仅允许使用，不允许查看或编辑连接配置</a-checkbox>
       </div>
+      <div class="share-expiry-row">
+        <span class="share-expiry-label">分享有效期</span>
+        <a-select v-model:value="shareExpiry" size="small" class="share-expiry-select" @change="refreshShareText">
+          <a-select-option value="never">永久有效</a-select-option>
+          <a-select-option value="1h">1 小时</a-select-option>
+          <a-select-option value="1d">1 天</a-select-option>
+          <a-select-option value="7d">7 天</a-select-option>
+        </a-select>
+      </div>
       <a-textarea :value="shareModalState.shareText" :rows="6" readonly />
       <div class="share-modal-actions">
         <span class="share-connection-name">{{ shareModalState.connectionName }}</span>
@@ -632,6 +667,7 @@
         :description="`${shareImportPreview.id} · ${shareImportPreview.useSSL ? 'https://' : 'http://'}${shareImportPreview.endpoint}${shareImportPreview.bucket ? ` · ${shareImportPreview.bucket}${shareImportPreview.pathPrefix ? `/${shareImportPreview.pathPrefix}` : ''}` : ''}`"
         style="margin-top: 12px"
       />
+      <div v-if="shareImportPreview && shareImportExpiresAt" class="share-import-expiry">有效期至 {{ formatShareExpiry(shareImportExpiresAt) }}</div>
     </a-modal>
 
     <!-- 添加挂载 Modal -->
@@ -739,6 +775,7 @@ import {
   CaretDownOutlined,
   CaretRightOutlined,
   CheckCircleFilled,
+  MoreOutlined,
   ShareAltOutlined,
   LockOutlined,
   CopyOutlined,
@@ -781,7 +818,7 @@ interface McImportItem {
 }
 
 export default defineComponent({
-  components: { PlusOutlined, ImportOutlined, DeleteOutlined, FormOutlined, FolderOpenOutlined, PlayCircleOutlined, CloseSquareOutlined, DownOutlined, RightOutlined, CloudServerOutlined, HddOutlined, CaretDownOutlined, CaretRightOutlined, CheckCircleFilled, ShareAltOutlined, LockOutlined, CopyOutlined },
+  components: { PlusOutlined, ImportOutlined, DeleteOutlined, FormOutlined, FolderOpenOutlined, PlayCircleOutlined, CloseSquareOutlined, DownOutlined, RightOutlined, CloudServerOutlined, HddOutlined, CaretDownOutlined, CaretRightOutlined, CheckCircleFilled, MoreOutlined, ShareAltOutlined, LockOutlined, CopyOutlined },
   props: {
     open: { type: Boolean, default: undefined },
     visible: { type: Boolean, default: false },
@@ -808,6 +845,7 @@ export default defineComponent({
     const bucketFetching = ref(false);
     const availableDrives = ref<string[]>([]);
     const collapsedConnections = ref<Set<string>>(new Set());
+    const knownConnectionIds = new Set<string>();
 
     const toggleConnection = (id: string) => {
       const newSet = new Set(collapsedConnections.value);
@@ -817,6 +855,41 @@ export default defineComponent({
     };
 
     const hasConnectionTargets = (conn: Connection) => configStore.targetsByConnectionId(conn.id).length > 0;
+    const connectionTargetCount = (conn: Connection) => configStore.targetsByConnectionId(conn.id).length;
+    const connectionScopeLabel = (conn: Connection) => {
+      if (conn.bucket) return conn.pathPrefix ? `${conn.bucket}/${conn.pathPrefix}` : conn.bucket;
+      return '全部 Bucket';
+    };
+
+    const syncCollapsedConnections = () => {
+      const ids = new Set(configStore.connections.map(conn => conn.id));
+      const next = new Set([...collapsedConnections.value].filter(id => ids.has(id)));
+      ids.forEach(id => {
+        if (!knownConnectionIds.has(id)) next.add(id);
+      });
+      knownConnectionIds.clear();
+      ids.forEach(id => knownConnectionIds.add(id));
+      collapsedConnections.value = next;
+    };
+
+    const handleImportMenuClick = ({ key }: { key: string | number }) => {
+      if (String(key) === 'mc') mcImportVisible.value = true;
+      if (String(key) === 'share') shareImportVisible.value = true;
+    };
+
+    const handleConnectionMenuClick = ({ key }: { key: string | number }, conn: Connection) => {
+      switch (String(key)) {
+        case 'edit':
+          handleEditConnection(conn);
+          break;
+        case 'share':
+          handleShareConnection(conn);
+          break;
+        case 'delete':
+          handleDeleteConnection(conn.id);
+          break;
+      }
+    };
 
     const tabs = [
       { key: 'bucket', label: '连接' },
@@ -1041,16 +1114,27 @@ export default defineComponent({
       shareText: '',
     });
     const shareReadonly = ref(true);
+    const shareExpiry = ref<'never' | '1h' | '1d' | '7d'>('never');
     const shareSourceConnection = ref<Connection | null>(null);
     const shareImportVisible = ref(false);
     const shareImportText = ref('');
     const shareImportPreview = ref<Connection | null>(null);
+    const shareImportExpiresAt = ref<number | null>(null);
+
+    const getShareExpiryTimestamp = () => {
+      const durations: Record<string, number> = { '1h': 60 * 60 * 1000, '1d': 24 * 60 * 60 * 1000, '7d': 7 * 24 * 60 * 60 * 1000 };
+      const duration = durations[shareExpiry.value];
+      return duration ? Date.now() + duration : undefined;
+    };
+
+    const formatShareExpiry = (expiresAt: number) => new Date(expiresAt).toLocaleString();
 
     const refreshShareText = () => {
       if (!shareSourceConnection.value) return;
       shareModalState.shareText = native.createConnectionShare(
         _.cloneDeep(toRaw(shareSourceConnection.value)),
         shareReadonly.value,
+        getShareExpiryTimestamp(),
       );
     };
 
@@ -1083,6 +1167,7 @@ export default defineComponent({
         shareModalState.connectionName = conn.id;
         shareSourceConnection.value = _.cloneDeep(toRaw(conn));
         shareReadonly.value = true;
+        shareExpiry.value = 'never';
         refreshShareText();
         shareModalState.visible = true;
       } catch (err: any) {
@@ -1099,11 +1184,13 @@ export default defineComponent({
 
     const parseConnectionShareText = () => {
       shareImportPreview.value = null;
+      shareImportExpiresAt.value = null;
       const text = shareImportText.value.trim();
       if (!text) return;
       const result = native.parseConnectionShare(text);
       if (result.success && result.connection) {
         shareImportPreview.value = result.connection;
+        shareImportExpiresAt.value = result.expiresAt || null;
       }
     };
 
@@ -1138,6 +1225,7 @@ export default defineComponent({
       shareImportVisible.value = false;
       shareImportText.value = '';
       shareImportPreview.value = null;
+      shareImportExpiresAt.value = null;
     };
 
     watch(shareReadonly, refreshShareText);
@@ -1784,7 +1872,7 @@ export default defineComponent({
 
     watch(drawerOpen, (val) => {
       if (val) {
-        collapsedConnections.value = new Set(configStore.connections.map(conn => conn.id));
+        syncCollapsedConnections();
         handleDriveList();
         handleCheckMounts();
         fuseBinValue.value = settingStore.fuseBin || '';
@@ -1798,6 +1886,7 @@ export default defineComponent({
         colorGroupIdValue.value = settingStore.connectionColorGroupId || defaultConnectionColorGroups[0].id;
       }
     }, { immediate: true });
+    watch(() => configStore.connections.map(conn => conn.id), syncCollapsedConnections, { immediate: true });
     // bucket 清空时自动清空 pathPrefix
     watch(() => connectionModalFormState.value.bucket, (val) => {
       if (!val) connectionModalFormState.value.pathPrefix = '';
@@ -1822,7 +1911,8 @@ export default defineComponent({
       existingGroupOptions, advancedConfigVisible, connectionTesting, handleTestConnection,
       handleClose,
       handleSelectFuse, handleSelectDefaultCacheDirectory, handleSelectDefaultDownloadDirectory,
-      collapsedConnections, toggleConnection, hasConnectionTargets,
+      collapsedConnections, toggleConnection, hasConnectionTargets, connectionTargetCount, connectionScopeLabel,
+      handleImportMenuClick, handleConnectionMenuClick,
       handleFuseBinChange, handleDefaultCacheDirectoryChange, handleDefaultDownloadDirectoryChange, handleDefaultPageSizeChange,
       handleListLoadModeChange, handleTransferConcurrencyChange, handleCloseBehaviorChange, handleConfirmBeforeExitChange, handleOpenLogDirectory, connectionColorGroups, activeCustomColorGroup,
       normalizeHexColor, handleConnectionColorGroupChange, handleCopyColorGroup, syncActiveCustomColorGroup,
@@ -1832,8 +1922,9 @@ export default defineComponent({
       handleMcImport, handleMcImportFile, handleMcImportParse, handleMcImportSelectAll, handleMcImportCancel,
       handleMcImportEditItem,
       handleAddConnection, handleEditConnection, handleConnectionModalOk, handleConnectionModalCancel, handleDeleteConnection,
-      shareModalState, shareReadonly, handleShareConnection, handleCopyConnectionShare,
+      shareModalState, shareReadonly, shareExpiry, handleShareConnection, handleCopyConnectionShare, refreshShareText,
       shareImportVisible, shareImportText, shareImportPreview, parseConnectionShareText, handleImportConnectionShare, handleShareImportCancel,
+      shareImportExpiresAt, formatShareExpiry,
       handleAddTarget, handleTargetModalOk, handleDeleteTarget, handleTargetEnableChange,
       handleConnectionEnableChange, handleEditTarget,
       handleOpenLocalFolder, handleMount, handleUmount, handleSelectCacheDir,
@@ -1927,8 +2018,21 @@ export default defineComponent({
   }
 }
 .drawer-content-bucket { padding-bottom: 0; overflow: hidden; }
+.connection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 12px;
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+  flex-shrink: 0;
+}
+.connection-toolbar-copy { min-width: 0; }
+.connection-toolbar-title { color: var(--ant-color-text); font-size: 14px; font-weight: 600; line-height: 1.4; }
+.connection-toolbar-desc { color: var(--ant-color-text-tertiary); font-size: 11px; line-height: 1.4; margin-top: 2px; }
+.connection-toolbar-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.connection-toolbar-actions .ant-btn { display: inline-flex; align-items: center; gap: 4px; }
 .connection-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 0 8px; }
-.drawer-footer-actions { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--ant-color-border-secondary); background: var(--ant-color-bg-container); flex-shrink: 0; .add-btn-row { flex: 1; } }
 
 .connection-card {
   background: transparent; border: none; border-radius: 0; overflow: visible; margin-bottom: 0; box-shadow: none;
@@ -1937,15 +2041,20 @@ export default defineComponent({
     display: flex; align-items: center; justify-content: space-between; padding: 10px 4px; background: transparent; border-bottom: none; cursor: pointer; transition: background 0.2s, border-radius 0.2s;
     &.connection-card-header-static { cursor: default; }
     &:hover { background: var(--ant-color-fill-tertiary); border-radius: 6px; }
-    .connection-card-info { display: flex; align-items: center; gap: 10px;
+    .connection-card-info { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;
       .expand-icon { font-size: 10px; color: var(--ant-color-text-tertiary); transition: color 0.2s; display: flex; align-items: center; width: 12px; }
       .connection-icon { font-size: 16px; color: var(--ant-color-primary); }
-      .connection-card-name { font-size: 14px; font-weight: 600; color: var(--ant-color-text); letter-spacing: 0.5px; &.connection-disabled { color: var(--ant-color-text-tertiary); } }
+      .connection-card-copy { min-width: 0; flex: 1; }
+      .connection-card-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+      .connection-card-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; color: var(--ant-color-text); letter-spacing: 0; &.connection-disabled { color: var(--ant-color-text-tertiary); } }
       .readonly-badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border: 1px solid var(--ant-color-border-secondary); border-radius: 4px; color: var(--ant-color-text-secondary); font-size: 10px; line-height: 1.4; flex-shrink: 0; }
-      .connection-card-endpoint { font-size: 11px; color: var(--ant-color-text-tertiary); margin-left: 6px; }
+      .connection-card-meta { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 3px; color: var(--ant-color-text-tertiary); font-size: 11px; line-height: 1.35; }
+      .connection-card-endpoint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .connection-card-scope, .connection-card-target-count { flex-shrink: 0; }
+      .connection-card-scope::before, .connection-card-target-count::before { content: '·'; margin-right: 8px; color: var(--ant-color-text-quaternary); }
     }
     .connection-card-actions {
-      display: flex; gap: 4px;
+      display: flex; align-items: center; gap: 4px; flex-shrink: 0;
       .ant-btn {
         height: 24px; width: 24px; padding: 0; display: flex; align-items: center; justify-content: center; color: var(--ant-color-text-secondary);
         &:hover { color: var(--ant-color-text); background: var(--ant-color-fill-tertiary); }
@@ -1954,9 +2063,19 @@ export default defineComponent({
     }
   }
 }
+.menu-item-danger { color: #dc2626; }
 .share-modal-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .share-connection-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ant-color-text-secondary); font-size: 12px; }
 .share-mode-row { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--ant-color-border-secondary); border-radius: 6px; background: var(--ant-color-fill-quaternary); }
+.share-expiry-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 12px; }
+.share-expiry-label { color: var(--ant-color-text-secondary); font-size: 12px; }
+.share-expiry-select { width: 120px; }
+.share-import-expiry { margin-top: 8px; color: var(--ant-color-text-secondary); font-size: 11px; }
+.connection-form-section { margin: 2px 0 12px; }
+.connection-form-section-spaced { margin-top: 16px; }
+.connection-form-section-title { color: var(--ant-color-text); font-size: 12px; font-weight: 600; line-height: 1.4; }
+.connection-form-section-desc { color: var(--ant-color-text-tertiary); font-size: 11px; line-height: 1.4; margin-top: 3px; }
+.advanced-config-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; color: var(--ant-color-text-tertiary); font-size: 11px; }
 .target-list { padding: 2px 4px 8px 38px; display: flex; flex-direction: column; gap: 2px; background: transparent; position: relative;
 }
 
@@ -2523,9 +2642,9 @@ export default defineComponent({
   .compact-row-spacer { width: 12px; flex-shrink: 0; }
   .compact-item-half { flex: 1; min-width: 0; }
   .advanced-config-toggle {
-    display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--ant-color-bg-layout); border: 1px solid var(--ant-color-border); border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--ant-color-text-secondary); cursor: pointer; transition: all 0.2s; margin-bottom: 8px;
-    &:hover { background: var(--ant-color-fill-tertiary); color: var(--ant-color-text); }
-    .toggle-icon { font-size: 11px; color: var(--ant-color-text-tertiary); transition: transform 0.2s; }
+    display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: transparent; border: 1px solid var(--ant-color-border-secondary); border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--ant-color-text-secondary); cursor: pointer; transition: color 0.15s, background 0.15s, border-color 0.15s; margin: 16px 0 8px;
+    &:hover, &.advanced-config-toggle-active { background: var(--ant-color-fill-quaternary); color: var(--ant-color-text); border-color: var(--ant-color-border); }
+    .toggle-icon { flex-shrink: 0; margin-left: auto; font-size: 10px; color: var(--ant-color-text-tertiary); }
   }
   .advanced-config-content {
     padding: 12px; background: var(--ant-color-bg-layout); border: 1px dashed var(--ant-color-border); border-radius: 6px; margin-bottom: 8px;
