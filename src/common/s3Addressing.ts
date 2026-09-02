@@ -2,6 +2,7 @@ export interface S3AddressingAdvice {
   pathStyle: boolean;
   provider: string;
   reason: string;
+  region?: string;
 }
 
 const getHostname = (endpoint: string): string => {
@@ -22,6 +23,22 @@ const hasDomainSuffix = (hostname: string, suffix: string): boolean => hostname 
 export const inferS3Addressing = (endpoint: string): S3AddressingAdvice => {
   const hostname = getHostname(endpoint);
 
+  if (hasDomainSuffix(hostname, 's3-legacy.mediacloud.imgo.tv')) {
+    return {
+      pathStyle: true,
+      provider: 'MediaCloud 对象存储（Legacy）',
+      reason: '已识别内部 Legacy Endpoint，自动填入长沙 2 区域。',
+      region: 'cn-changsha-2',
+    };
+  }
+  if (hasDomainSuffix(hostname, 's3.mediacloud.imgo.tv')) {
+    return {
+      pathStyle: true,
+      provider: 'MediaCloud 对象存储',
+      reason: '已识别内部 Endpoint，自动填入长沙 1 区域。',
+      region: 'cn-changsha-1',
+    };
+  }
   if (hasDomainSuffix(hostname, 'aliyuncs.com')) {
     return { pathStyle: false, provider: '阿里云 OSS', reason: '该 Endpoint 使用 VirtualHost 访问。' };
   }

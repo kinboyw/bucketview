@@ -1355,7 +1355,7 @@ export default defineComponent({
             endpoint: endpoint.endpoint,
             accessKeyId: aliasConfig.accessKey,
             accessKeySecret: aliasConfig.secretKey,
-            region: 'us-east-1',
+            region: addressing.region || 'us-east-1',
             useSSL: endpoint.useSSL,
             pathStyle: addressing.pathStyle,
             bucket: '',
