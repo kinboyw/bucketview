@@ -4,6 +4,12 @@
  */
 {
   "appId": "app.bucketview.desktop",
+  "protocols": [
+    {
+      "name": "BucketView",
+      "schemes": ["bucketview"]
+    }
+  ],
   "asar": true,
   "asarUnpack": [
     "**/node_modules/better-sqlite3/**/*",

@@ -1,0 +1,12 @@
+allowBuilds:
+  '@vue-office/docx': true
+  '@vue-office/excel': true
+  '@vue-office/pptx': true
+  better-sqlite3: true
+  core-js: true
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  koffi: true
+  vue-demi: true
+

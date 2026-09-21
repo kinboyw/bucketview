@@ -5,6 +5,8 @@ import Router from "./router";
 import store from "./store";
 
 const app = createApp(App)
+const native = (window as any).native
+native?.ipcSend?.('startup-stage', 'renderer-app-created')
 app.config.errorHandler = (err, instance, info) => {
   console.error('[Vue Error]', info, err)
   try {
@@ -34,5 +36,6 @@ app
   .use(store)
   .mount('#app')
   .$nextTick(() => {
+    native?.ipcSend?.('startup-stage', 'renderer-next-tick')
     postMessage({ payload: 'removeLoading' }, '*')
   })

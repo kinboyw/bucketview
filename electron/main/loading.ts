@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as nodePath from 'path';
+import * as nodeFs from 'fs';
 
 const loadView = ({ title }) => {
   let logoSvg = '';
@@ -7,7 +8,7 @@ const loadView = ({ title }) => {
     const publicPath = process.env.VITE_DEV_SERVER_URL
       ? nodePath.join(__dirname, '../../public')
       : nodePath.join(__dirname, '../../dist');
-    logoSvg = fs.readFileSync(nodePath.join(publicPath, 'favicon.svg'), 'utf-8');
+    logoSvg = nodeFs.readFileSync(nodePath.join(publicPath, 'favicon.svg'), 'utf-8');
     // Modify width and height of the SVG to fit the splash screen
     logoSvg = logoSvg.replace(/width="\d+"/i, 'width="120"').replace(/height="\d+"/i, 'height="120"');
   } catch (e) {

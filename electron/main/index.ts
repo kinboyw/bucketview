@@ -81,6 +81,50 @@ let previewOwnerWebContents: WebContents | null = null
 let previewTextDirty = false
 let previewCloseConfirmed = false
 let forceQuit = false;
+const BUCKETVIEW_PROTOCOL = 'bucketview';
+const supportedBucketViewUriPrefixes = [
+  'bucketview://connection-share/',
+  'bucketview://open/',
+];
+let rendererReadyForBucketViewUri = false;
+const pendingBucketViewUris: string[] = [];
+
+const getBucketViewUriFromArgs = (args: readonly string[]) => args.find((arg) =>
+  typeof arg === 'string' && supportedBucketViewUriPrefixes.some((prefix) => arg.startsWith(prefix)),
+);
+
+const queueBucketViewUri = (uri: string | undefined) => {
+  if (!uri || !supportedBucketViewUriPrefixes.some((prefix) => uri.startsWith(prefix))) return;
+  if (pendingBucketViewUris.includes(uri)) return;
+  pendingBucketViewUris.push(uri);
+  // A deep link is a credential. Keep only a small in-memory queue and never log it.
+  if (pendingBucketViewUris.length > 8) pendingBucketViewUris.shift();
+  flushBucketViewUris();
+};
+
+const queueBucketViewUriFromArgs = (args: readonly string[]) => queueBucketViewUri(getBucketViewUriFromArgs(args));
+
+const flushBucketViewUris = () => {
+  if (!rendererReadyForBucketViewUri || !win || win.isDestroyed()) return;
+  const uri = pendingBucketViewUris.shift();
+  if (!uri) return;
+  win.webContents.send('bucketview-uri', uri);
+  // Dispatch one URI per renderer turn so multiple browser requests preserve order.
+  setTimeout(flushBucketViewUris, 0);
+};
+
+queueBucketViewUriFromArgs(process.argv);
+
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  queueBucketViewUri(url);
+  if (app.isReady()) void createWindow();
+});
+const startupStartedAt = performance.now();
+const startupElapsedMs = () => Math.round(performance.now() - startupStartedAt);
+const logStartup = (stage: string, meta?: Record<string, unknown>) => {
+  logger.info('startup', stage, { elapsedMs: startupElapsedMs(), ...meta });
+};
 // Here, you can also use other preload
 const preload = nodePath.join(__dirname, '../preload/index.js')
 const url = process.env.VITE_DEV_SERVER_URL
@@ -308,6 +352,7 @@ async function createWindow() {
     win.focus()
     return
   }
+  logStartup('create-window');
   const loadingWin = new BrowserWindow({
     show: false,
     frame: false, // 无边框（窗口、工具栏等），只包含网页内容
@@ -316,12 +361,13 @@ async function createWindow() {
     minWidth: winWidth,
     minHeight: winHeight,
     resizable: false,
-    // backgroundColor: "#2e2c29",
-    transparent: true, // 窗口是否支持透明，如果想做高级效果最好为true
+    backgroundColor: '#141414',
+    transparent: false,
   });
 
-  loadingWin.loadURL(loadingHtml);
+  void loadingWin.loadURL(loadingHtml);
   loadingWin.once('ready-to-show', () => {
+    logStartup('splash-ready');
     loadingWin.show();
   })
 
@@ -348,7 +394,9 @@ async function createWindow() {
       contextIsolation: true,
     },
   })
+  rendererReadyForBucketViewUri = false;
   remoteMain.enable(win.webContents);
+  let mainWindowShown = false;
 
   // 关闭窗口提示
   let isQuitting = false;
@@ -480,7 +528,9 @@ async function createWindow() {
   };
 
   const showMainWindowAndCheckUpdate = async () => {
-    if (!win || win.isDestroyed()) return;
+    if (mainWindowShown || !win || win.isDestroyed()) return;
+    mainWindowShown = true;
+    logStartup('main-window-shown');
     win.show();
     if (!loadingWin.isDestroyed()) {
       loadingWin.hide();
@@ -490,18 +540,26 @@ async function createWindow() {
   };
 
   ipcMain.once('removeLoading', async () => {
-    if (!loadingWin.isDestroyed()) {
-      await showMainWindowAndCheckUpdate();
-    }
+    logStartup('renderer-first-render');
+    await showMainWindowAndCheckUpdate();
   });
 
   win.once('ready-to-show', () => {
-    setTimeout(async () => {
-      if (!loadingWin.isDestroyed()) {
-        await showMainWindowAndCheckUpdate();
-      }
-    }, 3000);
-  })
+    logStartup('main-ready-to-show');
+    void showMainWindowAndCheckUpdate();
+  });
+  win.webContents.once('dom-ready', () => logStartup('main-dom-ready'));
+  win.webContents.once('did-finish-load', () => logStartup('main-load-finished'));
+  ipcMain.removeAllListeners('startup-stage');
+  ipcMain.on('startup-stage', (_event, stage: unknown) => {
+    if (typeof stage === 'string') logStartup(stage);
+  });
+  ipcMain.removeAllListeners('bucketview-uri-ready');
+  ipcMain.on('bucketview-uri-ready', (event) => {
+    if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
+    rendererReadyForBucketViewUri = true;
+    flushBucketViewUris();
+  });
 
   if (process.env.VITE_DEV_SERVER_URL) { // electron-vite-vue#298
     win.loadURL(url)
@@ -526,11 +584,17 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   if (!gotTheLock) return;
+  logStartup('app-ready');
+  if (process.defaultApp && process.argv[1]) {
+    app.setAsDefaultProtocolClient(BUCKETVIEW_PROTOCOL, process.execPath, [nodePath.resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient(BUCKETVIEW_PROTOCOL);
+  }
 
   const loginItemSettings = app.getLoginItemSettings();
   const startedHidden = process.argv.includes('--openAsHidden') ||
     (Platform.macos() && loginItemSettings.wasOpenedAsHidden);
-  const shouldOpenWindow = !startedHidden;
+  const shouldOpenWindow = !startedHidden || pendingBucketViewUris.length > 0;
 
   if (shouldOpenWindow) {
     await createWindow();
@@ -719,17 +783,19 @@ app.on('window-all-closed', () => {
   previewOwnerWebContents = null
   previewTextDirty = false
   previewCloseConfirmed = false
+  rendererReadyForBucketViewUri = false
   if (process.platform !== 'darwin' || forceQuit) {
     app.quit()
   }
 })
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, commandLine) => {
+  queueBucketViewUriFromArgs(commandLine)
   if (win) {
     if (win.isMinimized()) win.restore()
     win.focus()
   } else {
-    createWindow()
+    void createWindow()
   }
 })
 

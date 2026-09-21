@@ -82,6 +82,8 @@ export interface Connection {
   group?: string;
   /** 分享导入的连接只能使用，不能在界面中查看或编辑 Secret Key */
   readonly?: boolean;
+  /** 仅在当前进程内存在的临时访问连接，绝不写入配置。 */
+  temporary?: boolean;
 }
 
 export interface MountTarget {
@@ -170,6 +172,11 @@ export interface PreloadNative {
   writeClipboard: (s: string) => void;
   createConnectionShare: (connection: Connection, readonly?: boolean, expiresAt?: number) => string;
   parseConnectionShare: (share: string) => { success: boolean; connection?: Connection; expiresAt?: number; message?: string };
+  parseTemporaryAccess: (uri: string) => {
+    success: boolean;
+    access?: { connection: Connection; target: { bucket: string; pathPrefix?: string; objectName?: string }; expiresAt?: number };
+    message?: string;
+  };
   osType: () => string;
   openDevTools: () => void;
   openLocalFolder: (path: string) => void;

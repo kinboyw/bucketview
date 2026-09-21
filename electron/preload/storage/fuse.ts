@@ -245,14 +245,14 @@ function readPid(targetId: string): number | null {
 function processCommand(pid: number): string {
   try {
     if (Platform.windows()) {
-      const result = nodeProcess.execFileSync('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-Command',
-        `(Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\").CommandLine`,
-      ], { windowsHide: true, timeout: 3000, encoding: 'utf8' });
+      // 使用 wmic 或快速命令行查询，避免拉起 powershell.exe 造成主线程 3 秒冻结
+      const result = nodeProcess.execFileSync('cmd.exe', [
+        '/c', `wmic process where ProcessId=${pid} get CommandLine 2>nul`,
+      ], { windowsHide: true, timeout: 1500, encoding: 'utf8' });
       return String(result || '').trim();
     }
     return String(nodeProcess.execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
-      timeout: 3000, encoding: 'utf8',
+      timeout: 1500, encoding: 'utf8',
     }) || '').trim();
   } catch {
     return '';

@@ -27,7 +27,7 @@
       <div class="connection-toolbar">
         <div class="connection-toolbar-copy">
           <div class="connection-toolbar-title">连接配置</div>
-          <div class="connection-toolbar-desc">{{ configStore.connections.length }} 个连接</div>
+          <div class="connection-toolbar-desc">{{ persistentConnections.length }} 个连接</div>
         </div>
         <div class="connection-toolbar-actions">
           <a-button type="primary" size="small" @click="handleAddConnection">
@@ -47,7 +47,7 @@
         </div>
       </div>
       <div class="connection-list">
-        <div v-for="conn in configStore.connections" :key="conn.id" class="connection-card">
+        <div v-for="conn in persistentConnections" :key="conn.id" class="connection-card">
           <div
             class="connection-card-header"
             :class="{ 'connection-card-header-static': !hasConnectionTargets(conn) }"
@@ -132,7 +132,7 @@
           </div>
         </div>
 
-        <a-empty v-if="configStore.connections.length === 0" description="暂无存储配置" class="drawer-empty" />
+        <a-empty v-if="persistentConnections.length === 0" description="暂无存储配置" class="drawer-empty" />
       </div>
     </div>
 
@@ -397,7 +397,13 @@
           label="Endpoint"
           :rules="[
             { required: true, message: '请输入Endpoint' },
-            { pattern: /^[\w.-]+(:\d+)?$/, message: '格式: host:port，不含协议前缀' }
+            {
+              async validator(_rule: any, value: string) {
+                const cleaned = String(value || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+                if (!cleaned) throw new Error('请输入Endpoint');
+                if (!/^[\w.-]+(:\d+)?$/.test(cleaned)) throw new Error('格式: host:port（例如 s3.example.com:9000）');
+              }
+            }
           ]"
           class="compact-item"
         >
@@ -405,6 +411,7 @@
             v-model:value="connectionModalFormState.endpoint"
             placeholder="例如: s3.example.com:9000"
             size="small"
+            @blur="handleEndpointBlur"
           >
             <template #addonBefore>
               <a-select v-model:value="endpointProtocol" style="width: 80px" size="small">
@@ -544,10 +551,6 @@
             <a-button size="small" @click="handleMcImportEditItem(item)">编辑</a-button>
           </div>
           <div class="mc-import-addressing">
-            <div class="mc-import-addressing-copy">
-              <span class="mc-import-addressing-provider">{{ item.addressing.provider }}</span>
-              <span class="mc-import-addressing-reason">{{ item.addressing.reason }}</span>
-            </div>
             <a-radio-group v-model:value="item.connection.pathStyle" size="small">
               <a-radio-button :value="true">Path Style</a-radio-button>
               <a-radio-button :value="false">VirtualHost</a-radio-button>
@@ -776,6 +779,7 @@ export default defineComponent({
   emits: ['update:open', 'mountChanged'],
   setup(props, { emit }) {
     const configStore = useConfigStore();
+    const persistentConnections = computed(() => configStore.connections.filter(conn => !conn.temporary));
     const settingStore = useSettingStore();
     const drawerOpen = computed(() => props.open ?? props.visible);
     const activeTab = ref('bucket');
@@ -812,7 +816,7 @@ export default defineComponent({
     };
 
     const syncCollapsedConnections = () => {
-      const ids = new Set(configStore.connections.map(conn => conn.id));
+      const ids = new Set(persistentConnections.value.map(conn => conn.id));
       const next = new Set([...collapsedConnections.value].filter(id => ids.has(id)));
       ids.forEach(id => {
         if (!knownConnectionIds.has(id)) next.add(id);
@@ -1166,7 +1170,7 @@ export default defineComponent({
         readonly: source.readonly === true,
       };
       configStore.addConnection(connection);
-      if (!configStore.activeConnectionId) configStore.setActiveConnection(connection.id);
+      configStore.openTab(connection.id);
       notification.success({ message: connection.readonly ? '导入只读连接成功' : '导入分享连接成功', description: connection.id });
       handleShareImportCancel();
     };
@@ -1444,8 +1448,8 @@ export default defineComponent({
         configStore.addConnection(conn);
       });
 
-      if (!configStore.activeConnectionId && selectedItems[0]?.connection.id) {
-        configStore.setActiveConnection(selectedItems[0].connection.id);
+      if (selectedItems[0]?.connection.id) {
+        configStore.openTab(selectedItems[0].connection.id);
       }
       notification.success({ message: '导入成功', description: `导入 ${selectedItems.length} 个连接` });
       mcImportVisible.value = false;
@@ -1526,9 +1530,7 @@ export default defineComponent({
         configStore.addConnection(conn);
         const targets = configStore.targetsByConnectionId(conn.id);
         await Promise.all(targets.map(target => fuse.syncAutoMount(_.cloneDeep(toRaw(conn)), _.cloneDeep(toRaw(target)))));
-        if (!configStore.activeConnectionId) {
-          configStore.setActiveConnection(conn.id);
-        }
+        configStore.openTab(conn.id);
         notification.success({ message: connectionModalState.editing ? "修改连接成功" : "添加连接成功", description: conn.id });
         connectionModalState.visible = false;
       }).catch(() => {
@@ -1807,6 +1809,12 @@ export default defineComponent({
 
     // ── 挂载状态检查 ──
     const handleCheckMounts = () => {
+      // 仅当存在有挂载盘符的目标时才进行检查
+      const targetsWithMount = configStore.mountTargets.filter(t => t.mountPoint && t.mountPoint.length > 0);
+      if (targetsWithMount.length === 0) {
+        configStore.mountTargets.forEach(t => { mountStates[t.id] = false; });
+        return;
+      }
       for (const target of configStore.mountTargets) {
         if (target.mountPoint && target.mountPoint.length > 0) {
           getTargetRuntimeStatus(target).then((result) => { mountStates[target.id] = result.status === 'mounted'; })
@@ -1817,15 +1825,9 @@ export default defineComponent({
       }
     };
 
-    const handleDriveList = () => {
-      if (!isWindows) return;
-      fuse.driveList().then((drives) => { windowsDrives.value = defaultDrives.filter(drive => !drives.includes(drive)); }).catch(() => {});
-    };
-
     watch(drawerOpen, (val) => {
       if (val) {
         syncCollapsedConnections();
-        handleDriveList();
         handleCheckMounts();
         fuseBinValue.value = settingStore.fuseBin || '';
         defaultCacheDirectoryValue.value = settingStore.defaultCacheDirectory || '';
@@ -1838,7 +1840,36 @@ export default defineComponent({
         colorGroupIdValue.value = settingStore.connectionColorGroupId || defaultConnectionColorGroups[0].id;
       }
     }, { immediate: true });
-    watch(() => configStore.connections.map(conn => conn.id), syncCollapsedConnections, { immediate: true });
+    watch(() => persistentConnections.value.map(conn => conn.id), syncCollapsedConnections, { immediate: true });
+    const handleEndpointBlur = () => {
+      let val = (connectionModalFormState.value.endpoint || '').trim();
+      if (/^https?:\/\//i.test(val)) {
+        endpointProtocol.value = val.toLowerCase().startsWith('https://') ? 'https' : 'http';
+        val = val.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+        connectionModalFormState.value.endpoint = val;
+      }
+    };
+
+    // 根据 endpoint 自动推导 PathStyle、Region 以及协议
+    watch(() => connectionModalFormState.value.endpoint, (rawVal) => {
+      if (!rawVal || !connectionModalState.visible) return;
+      let val = rawVal.trim();
+      if (/^https?:\/\//i.test(val)) {
+        endpointProtocol.value = val.toLowerCase().startsWith('https://') ? 'https' : 'http';
+        val = val.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+        nextTick(() => {
+          connectionModalFormState.value.endpoint = val;
+        });
+      }
+      const advice = inferS3Addressing(val);
+      connectionModalFormState.value.pathStyle = advice.pathStyle;
+      if (advice.region && !connectionModalState.editing) {
+        connectionModalFormState.value.region = advice.region;
+      }
+      if (advice.protocol && !connectionModalState.editing) {
+        endpointProtocol.value = advice.protocol;
+      }
+    });
     // bucket 清空时自动清空 pathPrefix
     watch(() => connectionModalFormState.value.bucket, (val) => {
       if (!val) connectionModalFormState.value.pathPrefix = '';
@@ -1848,7 +1879,7 @@ export default defineComponent({
     });
 
     return {
-      configStore, activeTab, tabs, endpointProtocol, drawerOpen,
+      configStore, persistentConnections, activeTab, tabs, endpointProtocol, drawerOpen,
       appVersion, appPlatform, copyrightYear, buildInfo,
       updateChecking, updateDownloading, updateInstalling, updateProgress,
       updateAvailableVersion, updateDownloaded, updateStatusText,
@@ -1861,6 +1892,7 @@ export default defineComponent({
       StringUtil, targetModalState, targetModalFormState,
       targetPathPrefixPlaceholder, targetPathPrefixWarning,
       existingGroupOptions, advancedConfigVisible, connectionTesting, handleTestConnection,
+      handleEndpointBlur,
       handleClose,
       handleSelectFuse, handleSelectDefaultCacheDirectory, handleSelectDefaultDownloadDirectory,
       collapsedConnections, toggleConnection, hasConnectionTargets, connectionTargetCount, connectionScopeLabel,
@@ -2433,12 +2465,8 @@ export default defineComponent({
     span { font-size: 11px; color: var(--ant-color-text-secondary); background: var(--ant-color-fill-tertiary); border-radius: 4px; padding: 2px 6px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   }
   .mc-import-addressing {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ant-color-border-secondary);
+    display: flex; justify-content: flex-end; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ant-color-border-secondary);
   }
-  .mc-import-addressing-copy { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-  .mc-import-addressing-provider { color: var(--ant-color-text-secondary); font-size: 11px; font-weight: 600; white-space: nowrap; }
-  .mc-import-addressing-reason { min-width: 0; overflow: hidden; color: var(--ant-color-text-tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-  .mc-import-addressing .ant-radio-group { flex-shrink: 0; }
 }
 .ant-popconfirm { .ant-popconfirm-buttons { .ant-btn-primary { background: #b91c1c; border-color: #b91c1c; &:hover { background: #dc2626; border-color: #dc2626; } } } }
 </style>

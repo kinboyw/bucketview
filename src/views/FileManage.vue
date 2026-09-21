@@ -868,9 +868,15 @@ export default defineComponent({
       configStore.openTab(connectionId);
     };
 
+    const discardClosedTemporaryConnections = () => {
+      const openIds = new Set(configStore.activeTabConnectionIds);
+      configStore.connections = configStore.connections.filter((conn) => !conn.temporary || openIds.has(conn.id));
+    };
+
     const handleCloseTab = (connectionId?: string) => {
       if (!connectionId) return;
       configStore.closeTab(connectionId);
+      discardClosedTemporaryConnections();
     };
 
     const tabContextMenu = reactive({
@@ -924,15 +930,99 @@ export default defineComponent({
       configStore.activeTabConnectionIds = [...nextTabs];
       if (nextTabs.length === 0) {
         configStore.activeConnectionId = '';
-        return;
-      }
-      if (preferredActiveId && nextTabs.includes(preferredActiveId)) {
+      } else if (preferredActiveId && nextTabs.includes(preferredActiveId)) {
         configStore.activeConnectionId = preferredActiveId;
+      } else if (!nextTabs.includes(configStore.activeConnectionId)) {
+        const nextIndex = Math.min(Math.max(fallbackIndex, 0), nextTabs.length - 1);
+        configStore.activeConnectionId = nextTabs[nextIndex];
+      }
+      discardClosedTemporaryConnections();
+    };
+
+    const normalizeDeepLinkPath = (value: string | undefined) => StringUtil.trim(String(value || '').replace(/\\/g, '/'), '/');
+
+    const createUniqueConnectionId = (base: string) => {
+      const name = base.trim() || '共享连接';
+      let id = name;
+      let index = 2;
+      while (configStore.getConnectionById(id)) id = `${name} (${index++})`;
+      return id;
+    };
+
+    const previewDeepLinkObject = async (objectName: string) => {
+      try {
+        const response = await storage.headObject(defaultStorage, objectName);
+        if (!response.exists) {
+          notification.error({ message: '无法打开文件', description: response.desc || '对象不存在或当前凭据无权访问' });
+          return;
+        }
+        handlePreviewObject({
+          name: native.pathBasename(objectName),
+          objectName,
+          size: response.size,
+          lastModified: response.lastModified,
+          type: 'normal',
+        });
+      } catch (error) {
+        notification.error({
+          message: '无法打开文件',
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+
+    const handleBucketViewUri = (uri: string) => {
+      if (uri.startsWith('bucketview://connection-share/')) {
+        const result = native.parseConnectionShare(uri);
+        if (!result.success || !result.connection) {
+          notification.error({ message: '导入连接失败', description: result.message || '分享地址无效' });
+          return;
+        }
+        const connection: Connection = {
+          ...result.connection,
+          id: createUniqueConnectionId(result.connection.id),
+          enabled: true,
+          readonly: result.connection.readonly === true,
+        };
+        configStore.addConnection(connection);
+        configStore.openTab(connection.id);
+        notification.success({ message: connection.readonly ? '已导入只读连接' : '已导入分享连接', description: connection.id });
         return;
       }
-      if (nextTabs.includes(configStore.activeConnectionId)) return;
-      const nextIndex = Math.min(Math.max(fallbackIndex, 0), nextTabs.length - 1);
-      configStore.activeConnectionId = nextTabs[nextIndex];
+
+      if (!uri.startsWith('bucketview://open/')) return;
+      const result = native.parseTemporaryAccess(uri);
+      if (!result.success || !result.access) {
+        notification.error({ message: '打开临时访问失败', description: result.message || '访问地址无效' });
+        return;
+      }
+
+      const { connection: source, target } = result.access;
+      const targetPrefix = normalizeDeepLinkPath(target.pathPrefix);
+      let objectName = normalizeDeepLinkPath(target.objectName);
+      if (targetPrefix && objectName.startsWith(`${targetPrefix}/`)) {
+        objectName = objectName.slice(targetPrefix.length + 1);
+      }
+      const temporaryConnection: Connection = {
+        ...source,
+        id: createUniqueConnectionId(`临时访问 · ${source.id || source.endpoint}`),
+        bucket: target.bucket,
+        pathPrefix: targetPrefix,
+        enabled: true,
+        readonly: true,
+        temporary: true,
+        group: '临时访问',
+      };
+      configStore.addConnection(temporaryConnection);
+      configStore.openTab(temporaryConnection.id);
+
+      const directory = objectName.includes('/') ? objectName.slice(0, objectName.lastIndexOf('/')) : '/';
+      handleStorageListObjects(directory || '/', true);
+      if (objectName) void previewDeepLinkObject(objectName);
+      notification.success({
+        message: '已打开临时访问',
+        description: '连接仅在当前运行期间可用，不会保存到本地配置',
+      });
     };
 
     const handleTabMenuClose = () => {
@@ -1842,8 +1932,10 @@ export default defineComponent({
 
     let mountCheckTimer: ReturnType<typeof setInterval> | null = null;
 
-    onMounted(async () => {
-      // Load transfer records from SQLite (retry if queue DB is still opening).
+    const restoreTransferHistory = async () => {
+      // Keep SQLite hydration out of the first-paint path. It can be slow on
+      // network profiles or after antivirus scans, but transfer history is not
+      // required for the initial shell to become interactive.
       await transferStore.loadFromStorage();
       if (!transferStore.loaded) {
         for (let i = 0; i < 20 && !transferStore.loaded; i++) {
@@ -1851,11 +1943,19 @@ export default defineComponent({
           await transferStore.loadFromStorage();
         }
       }
+    };
+
+    onMounted(() => {
+      setTimeout(() => { void restoreTransferHistory(); }, 0);
 
       window.addEventListener('resize', handleResize);
       window.addEventListener('click', handleClickOutside);
       window.addEventListener('mouseup', handleMouseButton);
       window.addEventListener('keydown', handleGlobalKeydown);
+      native.ipc('bucketview-uri', (_event, uri) => {
+        if (typeof uri === 'string') handleBucketViewUri(uri);
+      });
+      native.ipcSend('bucketview-uri-ready');
 
 
       storage.on('upload', (data: any) => {
@@ -1881,6 +1981,23 @@ export default defineComponent({
         if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
         refreshMountStatus();
       }, 10000);
+
+      // Initial bucket listing performs network work and directory compaction.
+      // Defer it until the main shell has had a chance to paint.
+      setTimeout(() => {
+        try {
+          const initActiveConn = configStore.getConnectionById(activeConnectionId.value);
+          if (activeConnectionId.value && initActiveConn) {
+            handleStorageListObjects('/', true);
+          } else if (connections.value.length > 0) {
+            const firstConn = connections.value[0];
+            configStore.setActiveConnection(firstConn.id);
+            handleStorageListObjects('/', true);
+          }
+        } catch (e) {
+          console.error('[FileManage] init error:', e);
+        }
+      }, 0);
     });
 
     const handleGlobalKeydown = (e: KeyboardEvent) => {
@@ -4032,20 +4149,6 @@ export default defineComponent({
       paginationState.current = 1;
       handleFileTableRowSelection([], []);
     };
-
-    // 初始化加载
-    try {
-      const initActiveConn = configStore.getConnectionById(activeConnectionId.value);
-      if (activeConnectionId.value && initActiveConn) {
-        handleStorageListObjects('/', true);
-      } else if (connections.value.length > 0) {
-        const firstConn = connections.value[0];
-        configStore.setActiveConnection(firstConn.id);
-        handleStorageListObjects('/', true);
-      }
-    } catch (e) {
-      console.error('[FileManage] init error:', e);
-    }
 
     const configDrawerRef = ref<any>(null);
 

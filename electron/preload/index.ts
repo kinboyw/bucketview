@@ -27,7 +27,7 @@ import nodeOs from 'node:os';
 import { Platform } from '../common';
 import { ensureRcloneBinary, managedRclonePath, bundledRclonePath } from '../common/rclone-bin'
 import { decryptSecret as decryptSecretValue, encryptSecret as encryptSecretValue } from '../common/secret-crypto';
-import { createConnectionShare, parseConnectionShare } from '../common/connection-share';
+import { createConnectionShare, parseConnectionShare, parseTemporaryAccess } from '../common/connection-share';
 import fse from 'fs-extra';
 import { stat } from 'original-fs';
 import { constant } from 'lodash';
@@ -66,7 +66,11 @@ const storages: { [key: string]: Storage } = { minio: minio };
 // Each worker receives a fresh storage instance for its immutable job context.
 const transferStorages: { [key: string]: () => Storage } = { minio: () => new S3Storage() };
 const eventBus = new EventEmitter();
-const transfer = new Transfer(transferStorages, eventBus);
+let transfer: Transfer | null = null;
+const getTransfer = () => {
+  if (!transfer) transfer = new Transfer(transferStorages, eventBus);
+  return transfer;
+};
 
 const getOptionString = (value: any, fallback: string = '') => typeof value === 'string' ? value : fallback;
 
@@ -119,7 +123,7 @@ contextBridge.exposeInMainWorld('storage', {
   },
   getObject(key: string, options: TransferObjectOption): void {
     const storage = storages[key];
-    transfer.Add({
+    getTransfer().Add({
       type: 'download',
       ...createTransferJob(key, storage, options),
       forceOverwrite: (options as any).forceOverwrite,
@@ -128,7 +132,7 @@ contextBridge.exposeInMainWorld('storage', {
   },
   putObject(key: string, options: TransferObjectOption): void {
     const storage = storages[key];
-    transfer.Add({
+    getTransfer().Add({
       type: 'upload',
       ...createTransferJob(key, storage, options),
     });
@@ -152,37 +156,37 @@ contextBridge.exposeInMainWorld('storage', {
     return storages[key]?.headObject(objectName);
   },
   listQueue(offset: number, limit: number) {
-    return transfer.listQueue(offset, limit)
+    return getTransfer().listQueue(offset, limit)
   },
   listFailedQueue(offset: number, limit: number) {
-    return transfer.listFailedQueue(offset, limit)
+    return getTransfer().listFailedQueue(offset, limit)
   },
   listSuccededQueue(offset: number, limit: number) {
-    return transfer.listSuccededQueue(offset, limit)
+    return getTransfer().listSuccededQueue(offset, limit)
   },
   upsertTransferRecord(uid: string, data: any) {
-    transfer.upsertTransferRecord(uid, data);
+    getTransfer().upsertTransferRecord(uid, data);
   },
   listTransferRecords(offset: number, limit: number) {
-    return transfer.listTransferRecords(offset, limit);
+    return getTransfer().listTransferRecords(offset, limit);
   },
   countTransferRecords() {
-    return transfer.countTransferRecords();
+    return getTransfer().countTransferRecords();
   },
   isTransferReady() {
-    return transfer.isReady();
+    return getTransfer().isReady();
   },
   waitTransferReady() {
-    return transfer.whenReady();
+    return getTransfer().whenReady();
   },
   deleteTransferRecord(uid: string) {
-    transfer.deleteTransferRecord(uid);
+    getTransfer().deleteTransferRecord(uid);
   },
   clearTransferRecords() {
-    transfer.clearTransferRecords();
+    getTransfer().clearTransferRecords();
   },
   recoverInterrupted() {
-    return transfer.recoverInterrupted();
+    return getTransfer().recoverInterrupted();
   },
   markCancel(uid: string) {
     markCancel(uid);
@@ -258,6 +262,9 @@ contextBridge.exposeInMainWorld('native', {
   },
   parseConnectionShare(share: string): { success: boolean; connection?: Connection; expiresAt?: number; message?: string } {
     return parseConnectionShare(share);
+  },
+  parseTemporaryAccess(uri: string) {
+    return parseTemporaryAccess(uri);
   },
   osType(): string {
     return nodeOs.type();
@@ -476,3 +483,5 @@ window.addEventListener('message', (ev) => {
     ipcRenderer.send('removeLoading');
   }
 });
+
+ipcRenderer.send('startup-stage', 'preload-ready');

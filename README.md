@@ -87,6 +87,10 @@ Current community builds are unsigned. Windows SmartScreen or macOS Gatekeeper m
 
 Do not commit access keys, secret keys, exported connection profiles, application databases, logs, or generated mount configuration files. See [SECURITY.md](SECURITY.md) for vulnerability reporting guidance.
 
+## Browser deep links
+
+The dependency-free browser ESM SDK is available in [sdk/bucketview-sdk.js](sdk/bucketview-sdk.js). It creates readonly connection-import links and non-persistent file or directory access links using the `bucketview://` scheme. See [sdk/README.md](sdk/README.md) for the API and credential-handling model.
+
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.

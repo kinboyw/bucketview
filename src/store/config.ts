@@ -156,8 +156,22 @@ export const useConfigStore = defineStore('config', {
         try {
           const g = globalThis as any;
           const native = (window as any).native as { encryptSecret?: (v: string) => string } | undefined;
+          // Runtime deep-link sessions must never be written to localStorage.
           // Tab switches only touch active ids; reuse last encrypted connections payload.
-          const connections = (value as any)?.connections;
+          const sourceConnections = Array.isArray((value as any)?.connections)
+            ? (value as any).connections as Connection[]
+            : [];
+          const persistentConnections = sourceConnections.some((conn) => conn?.temporary === true)
+            ? sourceConnections.filter((conn) => conn?.temporary !== true)
+            : sourceConnections;
+          const persistentConnectionIds = new Set(persistentConnections.map((conn: Connection) => conn.id));
+          const connections = persistentConnections;
+          const persistentTabs = Array.isArray((value as any)?.activeTabConnectionIds)
+            ? (value as any).activeTabConnectionIds.filter((id: string) => persistentConnectionIds.has(id))
+            : [];
+          const persistedActiveConnectionId = persistentConnectionIds.has((value as any)?.activeConnectionId)
+            ? (value as any).activeConnectionId
+            : (persistentTabs[persistentTabs.length - 1] || '');
           let encryptedConnections = g.__bvEncryptedConnections;
           if (connections !== g.__bvConnectionsRef || !encryptedConnections) {
             const cloneConnections = JSON.parse(JSON.stringify(connections || []));
@@ -175,9 +189,26 @@ export const useConfigStore = defineStore('config', {
           return JSON.stringify({
             ...value,
             connections: encryptedConnections,
+            activeTabConnectionIds: persistentTabs,
+            activeConnectionId: persistedActiveConnectionId,
           });
         } catch {
-          return JSON.stringify(value);
+          const fallback = value as any;
+          const connections = Array.isArray(fallback?.connections)
+            ? fallback.connections.filter((conn: Connection) => conn?.temporary !== true)
+            : [];
+          const connectionIds = new Set(connections.map((conn: Connection) => conn.id));
+          const tabs = Array.isArray(fallback?.activeTabConnectionIds)
+            ? fallback.activeTabConnectionIds.filter((id: string) => connectionIds.has(id))
+            : [];
+          return JSON.stringify({
+            ...fallback,
+            connections,
+            activeTabConnectionIds: tabs,
+            activeConnectionId: connectionIds.has(fallback?.activeConnectionId)
+              ? fallback.activeConnectionId
+              : (tabs[tabs.length - 1] || ''),
+          });
         }
       },
       deserialize(value) {
@@ -232,6 +263,14 @@ export const useConfigStore = defineStore('config', {
       store.activeTabConnectionIds = store.activeTabConnectionIds.filter(id =>
         store.connections.some(c => c.id === id && c.enabled !== false)
       );
+      // 如果存在启用的连接但没有打开任何 Tab，自动打开首个启用的连接
+      if (store.activeTabConnectionIds.length === 0) {
+        const firstEnabled = store.connections.find(c => c.enabled !== false);
+        if (firstEnabled) {
+          store.activeTabConnectionIds.push(firstEnabled.id);
+          store.activeConnectionId = firstEnabled.id;
+        }
+      }
       if (store.activeConnectionId && !store.activeTabConnectionIds.includes(store.activeConnectionId)) {
         store.activeConnectionId = store.activeTabConnectionIds.length > 0 ? store.activeTabConnectionIds[store.activeTabConnectionIds.length - 1] : "";
       }
