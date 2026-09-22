@@ -16,7 +16,7 @@
       <div
         v-for="tab in tabs"
         :class="['drawer-tab', { 'drawer-tab-active': activeTab === tab.key }]"
-        @click="activeTab = tab.key"
+        @click="activeTab = tab.key; if (tab.key === 'plugins') loadPluginsList();"
       >
         {{ tab.label }}
       </div>
@@ -133,6 +133,198 @@
         </div>
 
         <a-empty v-if="persistentConnections.length === 0" description="暂无存储配置" class="drawer-empty" />
+      </div>
+    </div>
+
+    <!-- 插件中心 -->
+    <div v-if="activeTab === 'plugins'" class="drawer-content drawer-content-plugins">
+      <div class="system-settings-intro">
+        <div>
+          <div class="system-settings-title">插件</div>
+          <div class="system-settings-desc">当前系统支持的外部工具链插件，用于提供本地挂载、广播级专业播放等扩展能力。</div>
+        </div>
+        <a-button size="small" :loading="pluginsLoading" @click="loadPluginsList">
+          <ReloadOutlined /> 检测状态
+        </a-button>
+      </div>
+
+      <div class="plugin-list">
+        <div v-for="plugin in pluginsList" :key="plugin.id" class="plugin-card">
+          <div class="plugin-card-header">
+            <div class="plugin-card-info">
+              <div class="plugin-title-row">
+                <span class="plugin-name">{{ plugin.name }}</span>
+                <span class="plugin-platform-tag">支持多平台</span>
+                <span v-if="plugin.status === 'ready'" class="badge badge-mounted" :title="plugin.source === 'system' ? '系统环境预装' : (plugin.source === 'custom' ? '自定义路径' : '本地自动管理')">
+                  <span class="badge-dot badge-dot-green"></span>已安装 {{ plugin.version ? `(v${plugin.version})` : '' }}
+                </span>
+                <span v-else-if="plugin.status === 'downloading'" class="badge badge-primary">
+                  <LoadingOutlined /> 安装中
+                </span>
+                <span v-else class="badge badge-off">
+                  <span class="badge-dot badge-dot-gray"></span>未安装
+                </span>
+              </div>
+              <div class="plugin-desc">{{ plugin.description }}</div>
+            </div>
+            <div class="plugin-header-actions">
+              <!-- 安装 / 重新安装按钮 -->
+              <template v-if="plugin.id === 'rclone'">
+                <a-button
+                  v-if="plugin.status !== 'ready'"
+                  type="primary"
+                  size="small"
+                  :loading="pluginActionLoading[plugin.id]"
+                  @click="handleDownloadRclonePlugin(plugin)"
+                >
+                  <DownloadOutlined /> 安装
+                </a-button>
+                <a-button
+                  v-else
+                  size="small"
+                  :loading="pluginActionLoading[plugin.id]"
+                  @click="handleDownloadRclonePlugin(plugin)"
+                  title="重新下载驱动"
+                >
+                  重新安装
+                </a-button>
+              </template>
+              <template v-else-if="plugin.id === 'mpv'">
+                <a-button
+                  v-if="plugin.status !== 'ready'"
+                  type="primary"
+                  size="small"
+                  :loading="pluginActionLoading[plugin.id]"
+                  @click="handleInstallMpvPlugin(plugin)"
+                >
+                  <DownloadOutlined /> 一键安装
+                </a-button>
+                <a-button
+                  v-else
+                  size="small"
+                  :loading="pluginActionLoading[plugin.id]"
+                  @click="handleInstallMpvPlugin(plugin)"
+                  title="重新检测或安装 MPV"
+                >
+                  重新安装
+                </a-button>
+              </template>
+
+              <!-- 配置按钮 -->
+              <a-button
+                size="small"
+                :type="pluginConfigOpen[plugin.id] ? 'primary' : 'default'"
+                :ghost="pluginConfigOpen[plugin.id]"
+                @click="pluginConfigOpen[plugin.id] = !pluginConfigOpen[plugin.id]"
+              >
+                <SettingOutlined /> 配置
+              </a-button>
+
+              <!-- 启用/停用开关 -->
+              <a-switch
+                :checked="plugin.enabled"
+                size="small"
+                title="启用或停用此插件"
+                @change="(val: boolean) => handleTogglePluginEnabled(plugin, val)"
+              />
+            </div>
+          </div>
+
+          <!-- 配置面板（点击配置按钮展开） -->
+          <div v-if="pluginConfigOpen[plugin.id]" class="plugin-card-body">
+            <!-- 路径信息及操作 -->
+            <div class="plugin-field-row">
+              <span class="plugin-field-label">程序路径</span>
+              <div class="plugin-field-control">
+                <a-input
+                  :value="plugin.customPath || plugin.executablePath || ''"
+                  size="small"
+                  placeholder="未设置（自动在系统中查找）"
+                  readonly
+                  class="plugin-path-input"
+                />
+                <a-tooltip title="手动指定可执行文件">
+                  <a-button size="small" @click="handleSelectPluginCustomPath(plugin)">
+                    <FolderOpenOutlined />
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip v-if="plugin.customPath" title="重置为默认检测路径">
+                  <a-button size="small" @click="handleResetPluginCustomPath(plugin)">
+                    重置
+                  </a-button>
+                </a-tooltip>
+              </div>
+            </div>
+
+            <!-- rclone 专属配置 -->
+            <template v-if="plugin.id === 'rclone'">
+              <div class="plugin-field-row">
+                <span class="plugin-field-label">缓存目录</span>
+                <div class="plugin-field-control">
+                  <a-input
+                    v-model:value="defaultCacheDirectoryValue"
+                    size="small"
+                    placeholder="系统临时目录"
+                    @change="handleDefaultCacheDirectoryChange"
+                  />
+                  <a-tooltip title="选择挂载缓存目录">
+                    <a-button size="small" @click="handleSelectDefaultCacheDirectory">
+                      <FolderOpenOutlined />
+                    </a-button>
+                  </a-tooltip>
+                </div>
+              </div>
+            </template>
+
+            <!-- mpv 专属配置 -->
+            <template v-if="plugin.id === 'mpv'">
+              <div class="plugin-field-row">
+                <span class="plugin-field-label">播放策略</span>
+                <div class="plugin-field-control">
+                  <a-radio-group
+                    :value="plugin.config?.playMode || 'smart'"
+                    size="small"
+                    @change="(e: any) => handleUpdatePluginSpecificConfig(plugin, { playMode: e.target.value })"
+                  >
+                    <a-radio-button value="smart">智能识别 (MOV/ProRes)</a-radio-button>
+                    <a-radio-button value="always">始终接管所有视频</a-radio-button>
+                    <a-radio-button value="manual">仅手动调起</a-radio-button>
+                  </a-radio-group>
+                </div>
+              </div>
+              <div class="plugin-field-row">
+                <span class="plugin-field-label">硬件加速</span>
+                <div class="plugin-field-control">
+                  <a-switch
+                    :checked="plugin.config?.hwdec !== false"
+                    size="small"
+                    @change="(val: boolean) => handleUpdatePluginSpecificConfig(plugin, { hwdec: val })"
+                  />
+                  <span class="plugin-field-tip">启用 GPU 硬件直解 (D3D11 / NVDEC / VideoToolbox)</span>
+                </div>
+              </div>
+              <div class="plugin-field-row">
+                <span class="plugin-field-label">窗口置顶</span>
+                <div class="plugin-field-control">
+                  <a-switch
+                    :checked="plugin.config?.ontop === true"
+                    size="small"
+                    @change="(val: boolean) => handleUpdatePluginSpecificConfig(plugin, { ontop: val })"
+                  />
+                  <span class="plugin-field-tip">播放窗口始终保持在最前</span>
+                </div>
+              </div>
+              <div class="plugin-field-row" style="margin-top: 2px;">
+                <span class="plugin-field-label"></span>
+                <div class="plugin-field-control">
+                  <a-button size="small" type="link" style="padding: 0; height: auto; font-size: 11px;" @click="handleShowMpvInstallGuide">
+                    查看手动安装命令行指引
+                  </a-button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -710,7 +902,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, reactive, ref, computed, watch, onMounted, toRaw } from 'vue';
+import { defineComponent, reactive, ref, computed, watch, onMounted, toRaw, h, nextTick } from 'vue';
 import {
   PlusOutlined,
   ImportOutlined,
@@ -730,9 +922,13 @@ import {
   ShareAltOutlined,
   LockOutlined,
   CopyOutlined,
+  ReloadOutlined,
+  LoadingOutlined,
+  SettingOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons-vue';
 import { Connection, ConnectionColorGroup, MountTarget, PreloadStorage, PreloadNative, PreloadFuse, UpdaterResponse } from '../../electron/preload/types';
-import { FormInstance, notification } from 'ant-design-vue';
+import { FormInstance, notification, Modal } from 'ant-design-vue';
 import { defaultStorage, useConfigStore } from '../store/config';
 import { defaultConnectionColorGroups, useSettingStore } from '../store/setting';
 import StringUtil from '../common/stringUtil';
@@ -771,7 +967,7 @@ interface McImportItem {
 }
 
 export default defineComponent({
-  components: { PlusOutlined, ImportOutlined, DeleteOutlined, FormOutlined, FolderOpenOutlined, PlayCircleOutlined, CloseSquareOutlined, DownOutlined, RightOutlined, CloudServerOutlined, HddOutlined, CaretDownOutlined, CaretRightOutlined, CheckCircleFilled, MoreOutlined, ShareAltOutlined, LockOutlined, CopyOutlined },
+  components: { PlusOutlined, ImportOutlined, DeleteOutlined, FormOutlined, FolderOpenOutlined, PlayCircleOutlined, CloseSquareOutlined, DownOutlined, RightOutlined, CloudServerOutlined, HddOutlined, CaretDownOutlined, CaretRightOutlined, CheckCircleFilled, MoreOutlined, ShareAltOutlined, LockOutlined, CopyOutlined, ReloadOutlined, LoadingOutlined, SettingOutlined, DownloadOutlined },
   props: {
     open: { type: Boolean, default: undefined },
     visible: { type: Boolean, default: false },
@@ -845,8 +1041,164 @@ export default defineComponent({
       }
     };
 
+    // ── 插件扩展中心状态与交互 ──
+    const defaultPluginsList: any[] = [
+      {
+        id: 'rclone',
+        name: '本地虚拟驱动器 (rclone)',
+        category: 'filesystem',
+        description: '支持将 S3 对象存储实时挂载为 Windows 本地盘符（或 macOS/Linux 文件夹），如本地磁盘般透明读写。',
+        supportedPlatforms: ['Windows', 'macOS', 'Linux'],
+        enabled: true,
+        status: 'missing',
+        version: '',
+        config: {},
+      },
+      {
+        id: 'mpv',
+        name: '专业音视频播放引擎 (MPV)',
+        category: 'media',
+        description: '提供广播影视级专业视音频无损拉流解码（支持 Apple ProRes 全系列、多轨未压缩 PCM 音频与时间码轨）。',
+        supportedPlatforms: ['Windows', 'macOS', 'Linux'],
+        enabled: true,
+        status: 'missing',
+        version: '',
+        config: { playMode: 'smart', hwdec: true },
+      },
+    ];
+    const pluginsList = ref<any[]>([...defaultPluginsList]);
+    const pluginsLoading = ref(false);
+    const pluginActionLoading = reactive<Record<string, boolean>>({});
+    const pluginConfigOpen = reactive<Record<string, boolean>>({ rclone: false, mpv: false });
+
+    const loadPluginsList = async () => {
+      if (!native?.getPlugins) return;
+      pluginsLoading.value = true;
+      try {
+        const res = await native.getPlugins();
+        if (Array.isArray(res) && res.length > 0) {
+          pluginsList.value = res;
+        }
+      } catch (e) {
+        console.error('[PLUGINS] Failed to load plugins:', e);
+      } finally {
+        pluginsLoading.value = false;
+      }
+    };
+
+    const handleTogglePluginEnabled = async (plugin: any, val: boolean) => {
+      plugin.enabled = val;
+      try {
+        const updated = await native.updatePluginConfig?.(plugin.id, { enabled: val });
+        if (updated) {
+          const idx = pluginsList.value.findIndex(p => p.id === plugin.id);
+          if (idx !== -1) pluginsList.value[idx] = updated;
+        }
+        notification.success({ message: `${plugin.name} 已${val ? '启用' : '禁用'}` });
+      } catch (e: any) {
+        notification.error({ message: '更新插件状态失败', description: e.message });
+      }
+    };
+
+    const handleUpdatePluginSpecificConfig = async (plugin: any, configUpdates: Record<string, any>) => {
+      const mergedConfig = { ...(plugin.config || {}), ...configUpdates };
+      try {
+        const updated = await native.updatePluginConfig?.(plugin.id, { config: mergedConfig });
+        if (updated) {
+          const idx = pluginsList.value.findIndex(p => p.id === plugin.id);
+          if (idx !== -1) pluginsList.value[idx] = updated;
+        }
+        notification.success({ message: '配置已更新' });
+      } catch (e: any) {
+        notification.error({ message: '保存插件配置失败', description: e.message });
+      }
+    };
+
+    const handleSelectPluginCustomPath = (plugin: any) => {
+      const filters = isWindows
+        ? [{ name: '可执行文件', extensions: ['exe'] }]
+        : [{ name: '可执行文件', extensions: ['*'] }];
+      const paths = native.getLocalFilename(filters);
+      if (paths) {
+        native.updatePluginConfig?.(plugin.id, { customPath: paths }).then((updated: any) => {
+          if (updated) {
+            const idx = pluginsList.value.findIndex(p => p.id === plugin.id);
+            if (idx !== -1) pluginsList.value[idx] = updated;
+          }
+          notification.success({ message: `已设置 ${plugin.name} 路径` });
+        });
+      }
+    };
+
+    const handleResetPluginCustomPath = async (plugin: any) => {
+      try {
+        const updated = await native.updatePluginConfig?.(plugin.id, { customPath: '' });
+        if (updated) {
+          const idx = pluginsList.value.findIndex(p => p.id === plugin.id);
+          if (idx !== -1) pluginsList.value[idx] = updated;
+        }
+        notification.success({ message: `已重置 ${plugin.name} 路径为默认检测` });
+      } catch (e: any) {
+        notification.error({ message: '重置路径失败', description: e.message });
+      }
+    };
+
+    const handleDownloadRclonePlugin = async (plugin: any) => {
+      pluginActionLoading[plugin.id] = true;
+      try {
+        notification.info({ message: '正在自动下载 rclone 挂载驱动…' });
+        const res = await native.ensurePluginRclone?.();
+        if (res?.success) {
+          notification.success({ message: 'rclone 驱动下载就绪！' });
+          await loadPluginsList();
+        } else {
+          notification.error({ message: '下载失败', description: res?.message });
+        }
+      } catch (e: any) {
+        notification.error({ message: '下载异常', description: e.message });
+      } finally {
+        pluginActionLoading[plugin.id] = false;
+      }
+    };
+
+    const handleInstallMpvPlugin = async (plugin: any) => {
+      pluginActionLoading[plugin.id] = true;
+      try {
+        notification.info({ message: '正在准备安装 MPV 播放引擎…', description: '后台静默下载安装中，请稍候…' });
+        const res = await native.ensurePluginMpv?.();
+        if (res?.success) {
+          notification.success({ message: 'MPV 播放引擎安装就绪！' });
+          await loadPluginsList();
+        } else {
+          notification.warning({ message: '自动安装未成功', description: res?.message || '已打开手动安装指引' });
+          handleShowMpvInstallGuide();
+        }
+      } catch (e: any) {
+        notification.error({ message: '安装异常', description: e.message });
+        handleShowMpvInstallGuide();
+      } finally {
+        pluginActionLoading[plugin.id] = false;
+      }
+    };
+
+    const handleShowMpvInstallGuide = () => {
+      Modal.info({
+        title: '安装 MPV 播放器指引',
+        width: 500,
+        content: () => h('div', { style: 'font-size: 13px; line-height: 1.6; margin-top: 12px;' }, [
+          h('p', null, 'MPV 是用于广播影视级高码率视音频（如 Apple ProRes、多轨未压缩 PCM 等）的硬件加速播放引擎。'),
+          h('div', { style: 'background: rgba(0,0,0,0.06); padding: 8px 12px; border-radius: 4px; font-family: monospace; margin: 8px 0;' },
+            isWindows ? 'winget install shinchiro.mpv' : 'brew install mpv'
+          ),
+          h('p', { style: 'color: #8c8c8c; font-size: 12px;' }, '安装后刷新检测，或点击上方文件夹图标手动定位 mpv 可执行文件。'),
+        ]),
+        okText: '我知道了',
+      });
+    };
+
     const tabs = [
       { key: 'bucket', label: '连接' },
+      { key: 'plugins', label: '插件' },
       { key: 'system', label: '系统' },
       { key: 'about', label: '关于' },
     ];
@@ -1909,6 +2261,9 @@ export default defineComponent({
       shareModalState, shareReadonly, shareExpiry, handleShareConnection, handleCopyConnectionShare, refreshShareText,
       shareImportVisible, shareImportText, shareImportPreview, parseConnectionShareText, handleImportConnectionShare, handleShareImportCancel,
       shareImportExpiresAt, formatShareExpiry,
+      pluginsList, pluginsLoading, pluginActionLoading, pluginConfigOpen, loadPluginsList, handleTogglePluginEnabled,
+      handleUpdatePluginSpecificConfig, handleSelectPluginCustomPath, handleResetPluginCustomPath, handleDownloadRclonePlugin,
+      handleInstallMpvPlugin, handleShowMpvInstallGuide,
       handleAddTarget, handleTargetModalOk, handleDeleteTarget, handleTargetEnableChange,
       handleConnectionEnableChange, handleEditTarget,
       handleOpenLocalFolder, handleMount, handleUmount, handleSelectCacheDir,
@@ -2466,6 +2821,113 @@ export default defineComponent({
   }
   .mc-import-addressing {
     display: flex; justify-content: flex-end; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ant-color-border-secondary);
+  }
+
+  /* 插件列表样式 */
+  .drawer-content-plugins {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .plugin-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .plugin-card {
+    border: 1px solid var(--ant-color-border-secondary);
+    border-radius: 8px;
+    background: var(--ant-color-bg-container);
+    overflow: hidden;
+    transition: border-color 0.2s;
+    &:hover { border-color: var(--ant-color-border); }
+  }
+  .plugin-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    gap: 14px;
+  }
+  .plugin-card-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+  }
+  .plugin-title-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .plugin-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ant-color-text);
+  }
+  .plugin-platform-tag {
+    font-size: 11px;
+    color: var(--ant-color-text-tertiary);
+    background: var(--ant-color-fill-tertiary);
+    border-radius: 4px;
+    padding: 1px 6px;
+    line-height: 16px;
+  }
+  .badge-dot-gray {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #9ca3af;
+    margin-right: 5px;
+  }
+  .plugin-desc {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ant-color-text-secondary);
+  }
+  .plugin-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .plugin-card-body {
+    border-top: 1px solid var(--ant-color-border-secondary);
+    background: var(--ant-color-fill-quaternary);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    animation: fadeIn 0.15s ease-in-out;
+  }
+  .plugin-field-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+  }
+  .plugin-field-label {
+    width: 60px;
+    flex-shrink: 0;
+    color: var(--ant-color-text-secondary);
+  }
+  .plugin-field-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+  }
+  .plugin-path-input {
+    flex: 1;
+  }
+  .plugin-field-tip {
+    font-size: 11px;
+    color: var(--ant-color-text-tertiary);
   }
 }
 .ant-popconfirm { .ant-popconfirm-buttons { .ant-btn-primary { background: #b91c1c; border-color: #b91c1c; &:hover { background: #dc2626; border-color: #dc2626; } } } }

@@ -190,8 +190,12 @@ export interface PreloadNative {
   setTransferConcurrency?: (value: number) => void;
   getLogPath?: () => Promise<{ file: string; directory: string }>;
   openLogDirectory?: () => Promise<{ success: boolean; message?: string }>;
-  checkMpvAvailable?: () => Promise<{ available: boolean; path?: string }>;
+  checkMpvAvailable?: () => Promise<{ available: boolean; path?: string; meta?: any }>;
   playWithMpv?: (payload: { url: string; title?: string }) => Promise<{ success: boolean; message?: string }>;
+  getPlugins?: () => Promise<any[]>;
+  updatePluginConfig?: (id: string, updates: any) => Promise<any>;
+  ensurePluginRclone?: (preferredPath?: string) => Promise<{ success: boolean; path?: string; message?: string; source?: string; version?: string }>;
+  ensurePluginMpv?: () => Promise<{ success: boolean; path?: string; message?: string; source?: string; version?: string }>;
   encryptSecret?: (value: string) => string;
   decryptSecret?: (value: string) => string;
   ipc: (channel: string, listener: (event: IpcRendererEvent, ...args: UpdaterResponse[]) => void) => void;

@@ -3955,13 +3955,18 @@ export default defineComponent({
       storage.signObject(defaultStorage, objInfo.objectName).then(async (resp: SignObjectResponse) => {
         if (resp.success) {
           previewModalState.previewFilePath = resp.url;
-          // 如果是 MOV 等专业视频格式，且系统已安装 MPV，直接唤起 MPV 播放
-          const isMovOrProVideo = ['mov', 'mxf'].includes((ext || '').toLowerCase());
-          if (fileType === 'video' && isMovOrProVideo && window.native?.checkMpvAvailable) {
+          // 检查系统扩展中 MPV 插件状态与播放策略
+          const isMovOrProVideo = ['mov', 'mxf', 'mkv', 'avi'].includes((ext || '').toLowerCase());
+          if (fileType === 'video' && native.checkMpvAvailable) {
             try {
-              const mpvStatus = await window.native.checkMpvAvailable();
-              if (mpvStatus?.available) {
-                const playRes = await window.native.playWithMpv?.({
+              const mpvStatus = await native.checkMpvAvailable();
+              const playMode = mpvStatus?.meta?.config?.playMode || 'smart';
+              const shouldLaunchMpv = mpvStatus?.available && (
+                playMode === 'always' ||
+                (playMode === 'smart' && isMovOrProVideo)
+              );
+              if (shouldLaunchMpv) {
+                const playRes = await native.playWithMpv?.({
                   url: resp.url,
                   title: objInfo.name || 'BucketView 视频预览',
                 });

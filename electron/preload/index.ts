@@ -349,11 +349,23 @@ contextBridge.exposeInMainWorld('native', {
   async openLogDirectory(): Promise<{ success: boolean; message?: string }> {
     return ipcRenderer.invoke('app-open-log-dir');
   },
-  async checkMpvAvailable(): Promise<{ available: boolean; path?: string }> {
+  async checkMpvAvailable(): Promise<{ available: boolean; path?: string; meta?: any }> {
     return ipcRenderer.invoke('mpv-check-available');
   },
   async playWithMpv(payload: { url: string; title?: string }): Promise<{ success: boolean; message?: string }> {
     return ipcRenderer.invoke('mpv-play', payload);
+  },
+  async getPlugins(): Promise<any[]> {
+    return ipcRenderer.invoke('plugin-get-all');
+  },
+  async updatePluginConfig(id: string, updates: any): Promise<any> {
+    return ipcRenderer.invoke('plugin-update-config', { id, updates });
+  },
+  async ensurePluginRclone(preferredPath?: string): Promise<any> {
+    return ipcRenderer.invoke('plugin-ensure-rclone', preferredPath);
+  },
+  async ensurePluginMpv(): Promise<any> {
+    return ipcRenderer.invoke('plugin-ensure-mpv');
   },
   ipc(channel: string, listener: (event: IpcRendererEvent, ...args: UpdaterResponse[]) => void): void {
     ipcRenderer.on(channel, listener);

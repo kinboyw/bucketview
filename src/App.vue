@@ -1,5 +1,5 @@
 <template>
-  <a-config-provider :theme="{ algorithm: isDarkTheme ? theme.darkAlgorithm : theme.defaultAlgorithm, token: { colorPrimary: '#1890ff' } }">
+  <a-config-provider :theme="antdTheme">
     <div class="app-shell">
       <div class="app-custom-titlebar">
         <img src="/favicon.svg" alt="logo" class="titlebar-logo" />
@@ -127,6 +127,14 @@ export default defineComponent({
       message: `当前版本 ${appVersion}`,
     });
     const isDarkTheme = computed(() => settingStore.themeMode === 'dark');
+    const antdTheme = computed(() => {
+      const darkAlgorithm = theme?.darkAlgorithm;
+      const defaultAlgorithm = theme?.defaultAlgorithm;
+      return {
+        algorithm: isDarkTheme.value ? darkAlgorithm : defaultAlgorithm,
+        token: { colorPrimary: '#1890ff' },
+      };
+    });
     const exitConfirmOpen = ref(false);
     const doNotRemindExit = ref(false);
 
@@ -333,6 +341,7 @@ export default defineComponent({
       updateStatusColor,
       handleCheckUpdate,
       handleInstallUpdate,
+      antdTheme,
       theme,
       isDarkTheme,
       exitConfirmOpen,

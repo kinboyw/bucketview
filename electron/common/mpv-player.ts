@@ -65,6 +65,11 @@ export async function isMpvAvailable(): Promise<{ available: boolean; path?: str
 export interface MpvPlayOptions {
   url: string;
   title?: string;
+  bounds?: { x?: number; y?: number; width?: number; height?: number };
+  geometry?: string;
+  autofitLarger?: string;
+  autofitSmaller?: string;
+  ontop?: boolean;
 }
 
 /**
@@ -95,10 +100,32 @@ export async function playWithMpv(options: MpvPlayOptions): Promise<{ success: b
       '--hwdec=auto',
       '--demuxer-lavf-o=discard=data', // 自动过滤并忽略 tmcd/数据流，避免 Unsupported codec 报错
       '--keep-open=yes',              // 播放完成后停留在最后一帧，方便回看
-      options.url,
     ];
 
-    logger.info('mpv', 'Launching mpv player', { path: mpvPath, title });
+    // 限制窗口大小与位置
+    if (options.geometry) {
+      args.push(`--geometry=${options.geometry}`);
+    } else if (options.bounds && options.bounds.width && options.bounds.height) {
+      const { x, y, width, height } = options.bounds;
+      if (typeof x === 'number' && typeof y === 'number') {
+        args.push(`--geometry=${Math.round(width)}x${Math.round(height)}+${Math.round(x)}+${Math.round(y)}`);
+      } else {
+        args.push(`--autofit=${Math.round(width)}x${Math.round(height)}`);
+        args.push('--geometry=50%:50%');
+      }
+    } else {
+      args.push(`--autofit-larger=${options.autofitLarger || '75%x75%'}`);
+      args.push(`--autofit-smaller=${options.autofitSmaller || '640x360'}`);
+      args.push('--geometry=50%:50%');
+    }
+
+    if (options.ontop) {
+      args.push('--ontop');
+    }
+
+    args.push(options.url);
+
+    logger.info('mpv', 'Launching mpv player', { path: mpvPath, title, args });
     const child = spawn(mpvPath, args, {
       detached: true,
       stdio: 'ignore',

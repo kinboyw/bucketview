@@ -50,7 +50,10 @@ export default defineConfig(({ command, mode }) => {
               minify: isBuild,
               outDir: 'dist-electron/main',
               rollupOptions: {
-                external: ['electron', 'better-sqlite3', 'koffi', 'kerberos'],
+                external: ['electron', 'better-sqlite3', 'koffi', 'kerberos', 'electron-store'],
+                output: {
+                  inlineDynamicImports: true,
+                },
               },
             },
           },
@@ -68,7 +71,7 @@ export default defineConfig(({ command, mode }) => {
               minify: isBuild,
               outDir: 'dist-electron/preload',
               rollupOptions: {
-                external: ['electron', 'better-sqlite3', 'koffi', 'kerberos'],
+                external: ['electron', 'better-sqlite3', 'koffi', 'kerberos', 'electron-store'],
                 output: {
                   inlineDynamicImports: true,
                 },

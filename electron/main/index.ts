@@ -11,7 +11,7 @@ import { Connection, MountTarget } from '../preload/types';
 import Registry from "winreg";
 import { handlerUpdater } from "./updater";
 import { logger } from '../common/logger';
-import { isMpvAvailable, playWithMpv } from '../common/mpv-player';
+import { pluginManager } from '../common/plugins/manager';
 import {
   PREVIEW_IPC,
   type PreviewDownloadRequest,
@@ -450,14 +450,50 @@ async function createWindow() {
     return err ? { success: false, message: err } : { success: true };
   });
 
+  // ── 统一插件系统 (PluginManager) IPC 通道 ──
+  try { ipcMain.removeHandler('plugin-get-all'); } catch {}
+  ipcMain.handle('plugin-get-all', async () => {
+    return pluginManager.getPlugins();
+  });
+
+  try { ipcMain.removeHandler('plugin-update-config'); } catch {}
+  ipcMain.handle('plugin-update-config', async (_event, payload: { id: any; updates: any }) => {
+    return pluginManager.updatePluginConfig(payload.id, payload.updates);
+  });
+
+  try { ipcMain.removeHandler('plugin-ensure-rclone'); } catch {}
+  ipcMain.handle('plugin-ensure-rclone', async (_event, preferredPath?: string) => {
+    return pluginManager.ensureRclone(preferredPath);
+  });
+
+  try { ipcMain.removeHandler('plugin-ensure-mpv'); } catch {}
+  ipcMain.handle('plugin-ensure-mpv', async () => {
+    return pluginManager.ensureMpv();
+  });
+
   try { ipcMain.removeHandler('mpv-check-available'); } catch {}
   ipcMain.handle('mpv-check-available', async () => {
-    return isMpvAvailable();
+    const meta = await pluginManager.getMpvMeta();
+    return { available: meta.enabled && meta.status === 'ready', path: meta.executablePath, meta };
   });
 
   try { ipcMain.removeHandler('mpv-play'); } catch {}
-  ipcMain.handle('mpv-play', async (_event, payload: { url: string; title?: string }) => {
-    return playWithMpv(payload);
+  ipcMain.handle('mpv-play', async (_event, payload: { url: string; title?: string; [key: string]: any }) => {
+    // 若未显式指定窗口位置，默认居中限制在当前主应用窗口范围内
+    if (!payload.geometry && !payload.bounds && win && !win.isDestroyed()) {
+      const winBounds = win.getBounds();
+      const targetWidth = Math.min(Math.round(winBounds.width * 0.85), 1280);
+      const targetHeight = Math.min(Math.round(winBounds.height * 0.85), 720);
+      const targetX = Math.round(winBounds.x + (winBounds.width - targetWidth) / 2);
+      const targetY = Math.round(winBounds.y + (winBounds.height - targetHeight) / 2);
+      payload.bounds = {
+        x: targetX,
+        y: targetY,
+        width: targetWidth,
+        height: targetHeight,
+      };
+    }
+    return pluginManager.playMpv(payload);
   });
 
   ipcMain.removeAllListeners('set-transfer-concurrency');
