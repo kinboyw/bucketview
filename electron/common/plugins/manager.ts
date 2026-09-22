@@ -5,6 +5,7 @@ import { app } from 'electron';
 import { PluginMeta, PluginId, PluginEnsureResult } from './types';
 import { ensureRcloneBinary, managedRclonePath, bundledRclonePath } from '../rclone-bin';
 import { findSystemMpv, playWithMpv, MpvPlayOptions } from '../mpv-player';
+import { downloadAndExtractMpv, managedMpvPath } from '../mpv-bin';
 import Store from 'electron-store';
 import { logger } from '../logger';
 
@@ -147,17 +148,11 @@ export class PluginManager {
       executablePath = customPath;
     } else {
       // 2. 检查 managed 路径（应用数据目录内）
-      const managedCandidates = [
-        path.join(userDataDir, 'bin', 'mpv', process.platform === 'win32' ? 'mpv.exe' : 'mpv'),
-        path.join(userDataDir, 'bin', process.platform === 'win32' ? 'mpv.exe' : 'mpv'),
-      ];
-      for (const m of managedCandidates) {
-        if (fs.existsSync(m)) {
-          status = 'ready';
-          source = 'managed';
-          executablePath = m;
-          break;
-        }
+      const managedPath = managedMpvPath(userDataDir, process.platform);
+      if (fs.existsSync(managedPath)) {
+        status = 'ready';
+        source = 'managed';
+        executablePath = managedPath;
       }
 
       // 3. 检查 bundled 资源路径
@@ -279,46 +274,61 @@ export class PluginManager {
       };
     }
 
+    const userDataDir = app.getPath('userData');
+
+    // 优先：直接通过官方 release zip 下载并解压到 userData/bin/mpv/（与 rclone 行为完全一致，不依赖 winget/brew）
+    try {
+      logger.info('plugins', 'Attempting direct HTTP download for MPV portable zip...');
+      const downloadResult = await downloadAndExtractMpv(userDataDir);
+      if (downloadResult.success && downloadResult.path) {
+        return downloadResult;
+      }
+      logger.warn('plugins', 'Direct MPV download failed, attempting system package manager fallback...', downloadResult.message);
+    } catch (e: any) {
+      logger.warn('plugins', 'Direct MPV download exception, fallback to system manager', e?.message);
+    }
+
     const isWin = process.platform === 'win32';
     const isMac = process.platform === 'darwin';
 
     if (isWin) {
-      // 1. 在 Windows 上优先通过 winget 静默安装官方认证便携包
+      // 备选降级：若系统刚好有 winget 则尝试静默安装
       const localAppData = process.env.LOCALAPPDATA || '';
       const wingetCandidate = path.join(localAppData, 'Microsoft', 'WindowsApps', 'winget.exe');
-      const wingetExe = fs.existsSync(wingetCandidate) ? wingetCandidate : 'winget';
-      try {
-        logger.info('plugins', 'Attempting silent MPV install via winget...', { wingetExe });
-        await new Promise<void>((resolve, reject) => {
-          execFile(
-            wingetExe,
-            ['install', '--id', 'shinchiro.mpv', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'],
-            { windowsHide: true, timeout: 180000 },
-            (err) => {
-              if (err) reject(err);
-              else resolve();
-            }
-          );
-        });
-        const recheck = await this.getMpvMeta();
-        if (recheck.status === 'ready' && recheck.executablePath) {
-          return {
-            success: true,
-            path: recheck.executablePath,
-            source: recheck.source,
-            version: recheck.version,
-          };
+      if (fs.existsSync(wingetCandidate)) {
+        try {
+          logger.info('plugins', 'Fallback: Attempting silent MPV install via winget...', { wingetCandidate });
+          await new Promise<void>((resolve, reject) => {
+            execFile(
+              wingetCandidate,
+              ['install', '--id', 'shinchiro.mpv', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'],
+              { windowsHide: true, timeout: 180000 },
+              (err) => {
+                if (err) reject(err);
+                else resolve();
+              }
+            );
+          });
+          const recheck = await this.getMpvMeta();
+          if (recheck.status === 'ready' && recheck.executablePath) {
+            return {
+              success: true,
+              path: recheck.executablePath,
+              source: recheck.source,
+              version: recheck.version,
+            };
+          }
+        } catch (e: any) {
+          logger.warn('plugins', 'winget install failed', e?.message);
         }
-      } catch (e: any) {
-        logger.warn('plugins', 'winget install failed, fallback to guide', e?.message);
       }
     } else if (isMac) {
-      // macOS 尝试 homebrew
+      // macOS 备选降级：homebrew
       const brewCandidate = '/opt/homebrew/bin/brew';
       const brewPath = fs.existsSync(brewCandidate) ? brewCandidate : (fs.existsSync('/usr/local/bin/brew') ? '/usr/local/bin/brew' : null);
       if (brewPath) {
         try {
-          logger.info('plugins', 'Attempting brew install mpv...');
+          logger.info('plugins', 'Fallback: Attempting brew install mpv...');
           await new Promise<void>((resolve, reject) => {
             execFile(brewPath, ['install', 'mpv'], { timeout: 180000 }, (err) => {
               if (err) reject(err);
@@ -342,7 +352,7 @@ export class PluginManager {
 
     return {
       success: false,
-      message: '自动安装未成功，请复制安装命令或手动指定本地 mpv 路径。',
+      message: '自动下载与安装未完成，请检查网络或在插件设置中指定本地 mpv 路径。',
     };
   }
 

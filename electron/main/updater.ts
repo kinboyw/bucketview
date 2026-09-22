@@ -1,6 +1,7 @@
 import { BrowserWindow, Notification, WebContents, app } from 'electron';
 import { Platform, sleep } from '../common';
 import { logger } from '../common/logger';
+import { getGitHubFallbackUrls } from '../common/github-proxy';
 import axios from 'axios';
 import YAML from 'yaml';
 import semver from 'semver';
@@ -84,21 +85,41 @@ class HandlerUpdater {
     }
 
     const latestFileName = `latest-${nodeOs.platform()}.yml`;
-    const latestURL = `${normalizedFeedURL}/${latestFileName}`;
+    const candidateFeedUrls = getGitHubFallbackUrls(normalizedFeedURL);
+
+    let parsed: unknown = null;
+    let successfulFeedUrl = normalizedFeedURL;
+
+    for (let i = 0; i < candidateFeedUrls.length; i++) {
+      const feed = candidateFeedUrls[i];
+      const latestURL = `${feed}/${latestFileName}`;
+      try {
+        const response = await axios.get<string>(latestURL, {
+          timeout: 10_000,
+          responseType: 'text',
+          headers: {
+            Accept: 'application/x-yaml, text/yaml, text/plain',
+            'Cache-Control': 'no-cache',
+          },
+          params: { t: Date.now() },
+        });
+        const data = YAML.parse(response.data) as unknown;
+        if (isUpdateInfo(data)) {
+          parsed = data;
+          successfulFeedUrl = feed;
+          if (i > 0) {
+            logger.info('updater', `Update check succeeded via GitHub proxy: ${feed}`);
+          }
+          break;
+        }
+      } catch (err: any) {
+        logger.warn('updater', `Update check failed for: ${latestURL}`, { message: err?.message || String(err) });
+      }
+    }
 
     try {
-      const response = await axios.get<string>(latestURL, {
-        timeout: 15_000,
-        responseType: 'text',
-        headers: {
-          Accept: 'application/x-yaml, text/yaml, text/plain',
-          'Cache-Control': 'no-cache',
-        },
-        params: { t: Date.now() },
-      });
-      const parsed = YAML.parse(response.data) as unknown;
       if (!isUpdateInfo(parsed)) {
-        throw new Error('更新清单格式无效');
+        throw new Error('无法连接更新服务器或更新清单格式无效');
       }
 
       if (!semver.gt(parsed.version, app.getVersion())) {
@@ -114,7 +135,7 @@ class HandlerUpdater {
       this.updateInfo = {
         version: parsed.version,
         fileName: file.name,
-        feedURL: normalizedFeedURL,
+        feedURL: successfulFeedUrl,
         sha512: file.sha512,
         size: file.size,
       };
@@ -138,42 +159,66 @@ class HandlerUpdater {
     try {
       if (!this.updateInfo) throw new Error('未找到可下载的更新');
 
-      const downloadURL = `${this.updateInfo.feedURL}/${this.updateInfo.fileName}`;
       const expectedPath = nodePath.join(nodeOs.tmpdir(), this.updateInfo.fileName);
       nodeFs.rmSync(expectedPath, { force: true });
 
-      const downloader = new DownloaderHelper(downloadURL, nodeOs.tmpdir(), {
-        retry: { maxRetries: 5, delay: 5_000 },
-        resumeOnIncomplete: true,
-        resumeOnIncompleteMaxRetry: 3,
-        fileName: this.updateInfo.fileName,
-        override: true,
-      });
+      const rawDownloadURL = `${this.updateInfo.feedURL}/${this.updateInfo.fileName}`;
+      const candidateUrls = getGitHubFallbackUrls(rawDownloadURL);
 
-      downloader.on('progress.throttled', stats => {
-        contents.send('handler-updater', {
-          cmd: 'download-progress',
-          parent: Number(stats.progress.toFixed(2)),
-        });
-      });
+      let downloadSuccess = false;
+      let lastDownloadError: Error | null = null;
 
-      const state = await downloader.start();
-      if (!state) throw new Error('更新包下载未完成');
+      for (let i = 0; i < candidateUrls.length; i++) {
+        const downloadURL = candidateUrls[i];
+        if (i > 0) {
+          logger.warn('updater', `Primary update package download failed, trying proxy mirror: ${downloadURL}`);
+        }
 
-      const downloadPath = downloader.getDownloadPath();
-      const stat = nodeFs.statSync(downloadPath);
-      if (stat.size !== this.updateInfo.size) {
-        nodeFs.rmSync(downloadPath, { force: true });
-        throw new Error('更新包大小校验失败，请重试');
+        try {
+          const downloader = new DownloaderHelper(downloadURL, nodeOs.tmpdir(), {
+            retry: { maxRetries: 2, delay: 2_000 },
+            resumeOnIncomplete: true,
+            resumeOnIncompleteMaxRetry: 2,
+            fileName: this.updateInfo.fileName,
+            override: true,
+          });
+
+          downloader.on('progress.throttled', stats => {
+            contents.send('handler-updater', {
+              cmd: 'download-progress',
+              parent: Number(stats.progress.toFixed(2)),
+            });
+          });
+
+          const state = await downloader.start();
+          if (!state) throw new Error('更新包下载未完成');
+
+          const downloadPath = downloader.getDownloadPath();
+          const stat = nodeFs.statSync(downloadPath);
+          if (stat.size !== this.updateInfo.size) {
+            nodeFs.rmSync(downloadPath, { force: true });
+            throw new Error('更新包大小校验失败');
+          }
+
+          const actualSha512 = await calculateSha512(downloadPath);
+          if (actualSha512.toLowerCase() !== this.updateInfo.sha512.toLowerCase()) {
+            nodeFs.rmSync(downloadPath, { force: true });
+            throw new Error('更新包完整性校验失败');
+          }
+
+          this.updateInfo.downloadPath = downloadPath;
+          downloadSuccess = true;
+          break;
+        } catch (err: any) {
+          lastDownloadError = err;
+          logger.warn('updater', `Download attempt ${i + 1} failed`, err?.message || String(err));
+        }
       }
 
-      const actualSha512 = await calculateSha512(downloadPath);
-      if (actualSha512.toLowerCase() !== this.updateInfo.sha512.toLowerCase()) {
-        nodeFs.rmSync(downloadPath, { force: true });
-        throw new Error('更新包完整性校验失败，请重试');
+      if (!downloadSuccess) {
+        throw lastDownloadError || new Error('所有更新包镜像下载均失败，请检查网络');
       }
 
-      this.updateInfo.downloadPath = downloadPath;
       contents.send('handler-updater', {
         cmd: 'update-downloaded',
         version: this.updateInfo.version,
