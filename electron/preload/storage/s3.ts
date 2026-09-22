@@ -20,8 +20,24 @@ import { Progress, Upload } from '@aws-sdk/lib-storage';
 import { Logger, MakeProgress, md5sum } from './utils';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from "@smithy/node-http-handler";
-import { ProxyAgent } from "proxy-agent";
+import http from 'node:http';
+import https from 'node:https';
 const logger = new Logger("warn");
+
+function getProxyAgent(): { httpAgent?: http.Agent; httpsAgent?: https.Agent } {
+  try {
+    const { ProxyAgent } = require('proxy-agent');
+    return {
+      httpAgent: new ProxyAgent(),
+      httpsAgent: new ProxyAgent(),
+    };
+  } catch {
+    return {
+      httpAgent: new http.Agent({ keepAlive: true }),
+      httpsAgent: new https.Agent({ keepAlive: true }),
+    };
+  }
+}
 
 function inferContentType(filePath: string): string | undefined {
   const ext = nodePath.extname(filePath || '').toLowerCase();
@@ -82,6 +98,7 @@ export class S3Storage implements Storage {
     this.pathPrefix = rawPrefix.replace(/^\/+|\/+$/g, '');
     this._virtualBuckets = [];
 
+    const agents = getProxyAgent();
     this.s3Client = new S3Client({
       region: connection.region,
       endpoint: `${connection.useSSL ? 'https' : 'http'}://${connection.endpoint}`,
@@ -93,8 +110,8 @@ export class S3Storage implements Storage {
       forcePathStyle: connection.pathStyle ?? true,
       requestHandler: new NodeHttpHandler({
         connectionTimeout: 2000,
-        httpAgent: new ProxyAgent(),
-        httpsAgent: new ProxyAgent(),
+        httpAgent: agents.httpAgent,
+        httpsAgent: agents.httpsAgent,
       }),
       logger: logger,
     });

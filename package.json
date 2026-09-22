@@ -27,7 +27,7 @@
     "build:mac": "vite build && electron-builder --mac --x64 --publish never",
     "build:mac:docker": "docker rmi bucketview_macos:$npm_package_version ; docker build -t bucketview_macos:$npm_package_version -f Dockerfile.macos . && docker run -d -it --rm --name bucketview_macos  bucketview_macos:$npm_package_version && docker cp bucketview_macos:/project/release . && docker stop bucketview_macos",
     "build:win": "vite build && electron-builder --win --x64 --publish never",
-    "rebuild:native": "electron-builder install-app-deps",
+    "rebuild:native": "prebuild-install --runtime electron --target 30.5.1 --arch x64 -d ./node_modules/better-sqlite3",
     "build:linux": "vite build && electron-builder --linux --x64 --publish never",
     "build:win:docker": "docker rmi bucketview_windows:$npm_package_version ; docker build -t bucketview_windows:$npm_package_version -f Dockerfile.windows . && docker run -d -it --rm --name bucketview_windows  bucketview_windows:$npm_package_version && docker cp bucketview_windows:/project/release . && docker stop bucketview_windows",
     "preview": "vite preview",

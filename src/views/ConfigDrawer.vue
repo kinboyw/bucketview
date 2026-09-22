@@ -1528,9 +1528,9 @@ export default defineComponent({
           return;
         }
         configStore.addConnection(conn);
+        configStore.openTab(conn.id);
         const targets = configStore.targetsByConnectionId(conn.id);
         await Promise.all(targets.map(target => fuse.syncAutoMount(_.cloneDeep(toRaw(conn)), _.cloneDeep(toRaw(target)))));
-        configStore.openTab(conn.id);
         notification.success({ message: connectionModalState.editing ? "修改连接成功" : "添加连接成功", description: conn.id });
         connectionModalState.visible = false;
       }).catch(() => {

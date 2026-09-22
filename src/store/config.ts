@@ -99,11 +99,14 @@ export const useConfigStore = defineStore('config', {
       } else {
         this.connections[index] = connection;
       }
+      this.connections = [...this.connections];
     },
     removeConnection(connectionId: string): void {
       _.remove(this.connections, c => c.id === connectionId);
+      this.connections = [...this.connections];
       // 同时删除该 connection 下的所有挂载目标
       _.remove(this.mountTargets, t => t.connectionId === connectionId);
+      this.mountTargets = [...this.mountTargets];
       this.closeTab(connectionId);
     },
     addMountTarget(target: MountTarget): void {
@@ -114,9 +117,11 @@ export const useConfigStore = defineStore('config', {
       } else {
         this.mountTargets[idx] = target;
       }
+      this.mountTargets = [...this.mountTargets];
     },
     removeMountTarget(targetId: string): void {
       _.remove(this.mountTargets, t => t.id === targetId);
+      this.mountTargets = [...this.mountTargets];
     },
     setActiveConnection(connectionId: string): void {
       this.activeConnectionId = connectionId;
@@ -173,7 +178,7 @@ export const useConfigStore = defineStore('config', {
             ? (value as any).activeConnectionId
             : (persistentTabs[persistentTabs.length - 1] || '');
           let encryptedConnections = g.__bvEncryptedConnections;
-          if (connections !== g.__bvConnectionsRef || !encryptedConnections) {
+          if (connections !== g.__bvConnectionsRef || !encryptedConnections || connections.length !== encryptedConnections.length) {
             const cloneConnections = JSON.parse(JSON.stringify(connections || []));
             if (Array.isArray(cloneConnections) && native?.encryptSecret) {
               encryptedConnections = cloneConnections.map((conn: any) => ({
