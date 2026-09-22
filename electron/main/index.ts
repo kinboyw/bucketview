@@ -11,6 +11,7 @@ import { Connection, MountTarget } from '../preload/types';
 import Registry from "winreg";
 import { handlerUpdater } from "./updater";
 import { logger } from '../common/logger';
+import { isMpvAvailable, playWithMpv } from '../common/mpv-player';
 import {
   PREVIEW_IPC,
   type PreviewDownloadRequest,
@@ -274,6 +275,7 @@ const createOrUpdatePreviewWindow = async (payload: PreviewWindowPayload, ownerW
   }
 }
 
+try { ipcMain.removeHandler(PREVIEW_IPC.open); } catch {}
 ipcMain.handle(PREVIEW_IPC.open, async (event, payload: unknown): Promise<PreviewWindowOpenResult> => {
   if (!isValidPreviewPayload(payload)) {
     return { success: false, error: '预览参数无效' }
@@ -450,13 +452,11 @@ async function createWindow() {
 
   try { ipcMain.removeHandler('mpv-check-available'); } catch {}
   ipcMain.handle('mpv-check-available', async () => {
-    const { isMpvAvailable } = await import('../common/mpv-player');
     return isMpvAvailable();
   });
 
   try { ipcMain.removeHandler('mpv-play'); } catch {}
   ipcMain.handle('mpv-play', async (_event, payload: { url: string; title?: string }) => {
-    const { playWithMpv } = await import('../common/mpv-player');
     return playWithMpv(payload);
   });
 

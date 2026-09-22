@@ -23,7 +23,12 @@
           />
 
           <div v-else-if="payload.fileType === 'video'" class="fill-preview media-preview">
-            <video-player :key="payload.id" :src="payload.url" />
+            <video-player
+              :key="payload.id"
+              :src="payload.url"
+              :title="payload.title"
+              :file-extension="payload.fileExtension"
+            />
           </div>
 
           <div v-else-if="payload.fileType === 'audio'" class="audio-preview">

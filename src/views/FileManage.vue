@@ -3952,9 +3952,25 @@ export default defineComponent({
         return;
       }
 
-      storage.signObject(defaultStorage, objInfo.objectName).then((resp: SignObjectResponse) => {
+      storage.signObject(defaultStorage, objInfo.objectName).then(async (resp: SignObjectResponse) => {
         if (resp.success) {
           previewModalState.previewFilePath = resp.url;
+          // 如果是 MOV 等专业视频格式，且系统已安装 MPV，直接唤起 MPV 播放
+          const isMovOrProVideo = ['mov', 'mxf'].includes((ext || '').toLowerCase());
+          if (fileType === 'video' && isMovOrProVideo && window.native?.checkMpvAvailable) {
+            try {
+              const mpvStatus = await window.native.checkMpvAvailable();
+              if (mpvStatus?.available) {
+                const playRes = await window.native.playWithMpv?.({
+                  url: resp.url,
+                  title: objInfo.name || 'BucketView 视频预览',
+                });
+                if (playRes?.success) return;
+              }
+            } catch (e) {
+              console.warn('[MPV] direct launch failed, fallback to web preview:', e);
+            }
+          }
           void presentPreparedPreview();
           return;
         }
