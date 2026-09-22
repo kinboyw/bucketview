@@ -349,6 +349,12 @@ contextBridge.exposeInMainWorld('native', {
   async openLogDirectory(): Promise<{ success: boolean; message?: string }> {
     return ipcRenderer.invoke('app-open-log-dir');
   },
+  async checkMpvAvailable(): Promise<{ available: boolean; path?: string }> {
+    return ipcRenderer.invoke('mpv-check-available');
+  },
+  async playWithMpv(payload: { url: string; title?: string }): Promise<{ success: boolean; message?: string }> {
+    return ipcRenderer.invoke('mpv-play', payload);
+  },
   ipc(channel: string, listener: (event: IpcRendererEvent, ...args: UpdaterResponse[]) => void): void {
     ipcRenderer.on(channel, listener);
   },

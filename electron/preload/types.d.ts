@@ -190,6 +190,8 @@ export interface PreloadNative {
   setTransferConcurrency?: (value: number) => void;
   getLogPath?: () => Promise<{ file: string; directory: string }>;
   openLogDirectory?: () => Promise<{ success: boolean; message?: string }>;
+  checkMpvAvailable?: () => Promise<{ available: boolean; path?: string }>;
+  playWithMpv?: (payload: { url: string; title?: string }) => Promise<{ success: boolean; message?: string }>;
   encryptSecret?: (value: string) => string;
   decryptSecret?: (value: string) => string;
   ipc: (channel: string, listener: (event: IpcRendererEvent, ...args: UpdaterResponse[]) => void) => void;

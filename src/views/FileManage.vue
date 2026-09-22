@@ -410,7 +410,11 @@
                 :start-index="galleryStartIndex"
               />
               <div v-else-if="previewModalState.fileType === 'video'" class="video-preview">
-                <video-player :src="previewModalState.previewFilePath" />
+                <video-player
+                  :src="previewModalState.previewFilePath"
+                  :title="previewModalState.objectName"
+                  :file-extension="previewModalState.fileExtension"
+                />
               </div>
               <div v-else-if="previewModalState.fileType === 'audio'" class="audio-preview">
                 <div class="audio-icon"><CustomerServiceOutlined style="font-size: 48px; color: var(--preview-text-muted)" /></div>

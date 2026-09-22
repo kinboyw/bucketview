@@ -448,6 +448,18 @@ async function createWindow() {
     return err ? { success: false, message: err } : { success: true };
   });
 
+  try { ipcMain.removeHandler('mpv-check-available'); } catch {}
+  ipcMain.handle('mpv-check-available', async () => {
+    const { isMpvAvailable } = await import('../common/mpv-player');
+    return isMpvAvailable();
+  });
+
+  try { ipcMain.removeHandler('mpv-play'); } catch {}
+  ipcMain.handle('mpv-play', async (_event, payload: { url: string; title?: string }) => {
+    const { playWithMpv } = await import('../common/mpv-player');
+    return playWithMpv(payload);
+  });
+
   ipcMain.removeAllListeners('set-transfer-concurrency');
   ipcMain.on('set-transfer-concurrency', (_event, value: unknown) => {
     const n = Math.max(1, Math.min(8, Math.floor(Number(value) || 3)));
