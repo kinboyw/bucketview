@@ -567,8 +567,13 @@
 
     <!-- 左下角配置按钮已整合至侧边栏底部 -->
 
-    <!-- 配置中心 Drawer -->
-    <ConfigDrawer ref="configDrawerRef" v-model:open="configDrawerVisible" @mountChanged="refreshMountStatus" />
+    <!-- 新版工作台级设置中心（方案1） -->
+    <SettingsCenter
+      v-if="configDrawerVisible"
+      v-model:open="configDrawerVisible"
+      :initial-connection-id="settingsTargetConnectionId"
+      @mountChanged="refreshMountStatus"
+    />
 
     <!-- 审计日志 -->
     <AuditLogModal v-model:open="auditModalVisible" />
@@ -700,6 +705,7 @@ import _ from 'lodash';
 import { getFileExtenstion, getFileType } from '../common/file';
 import ImageGallery from './ImageGallery.vue';
 import ConfigDrawer from './ConfigDrawer.vue';
+import SettingsCenter from './settings/SettingsCenter.vue';
 import TransferDrawer from './TransferDrawer.vue';
 import ObjectTable from './ObjectTable.vue';
 import AuditLogModal from './AuditLogModal.vue';
@@ -783,6 +789,7 @@ export default defineComponent({
     FullscreenOutlined,
     FullscreenExitOutlined,
     ConfigDrawer,
+    SettingsCenter,
     TransferDrawer,
     ObjectTable,
     AuditLogModal,
@@ -4202,14 +4209,12 @@ export default defineComponent({
       hotbarContextMenu.conn = null;
     };
 
+    const settingsTargetConnectionId = ref('');
+
     const handleHotbarMenuEdit = (conn: Connection | null) => {
       if (!conn) return;
+      settingsTargetConnectionId.value = conn.id;
       configDrawerVisible.value = true;
-      nextTick(() => {
-        if (configDrawerRef.value && configDrawerRef.value.handleEditConnection) {
-          configDrawerRef.value.handleEditConnection(conn);
-        }
-      });
     };
 
     const handleHotbarMenuGroup = (conn: Connection | null) => {
@@ -4360,6 +4365,7 @@ export default defineComponent({
       settingStore,
       auditStore,
       auditModalVisible,
+      settingsTargetConnectionId,
       previewModalState,
       previewModalLayout,
       isPreviewShellVisible,
