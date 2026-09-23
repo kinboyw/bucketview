@@ -36,7 +36,7 @@
     "check": "npm run build:app"
   },
   "devDependencies": {
-    "@ant-design/icons-vue": "7.0.0",
+    "@ant-design/icons-vue": "7.0.1",
     "@aws-sdk/client-s3": "^3.1045.0",
     "@aws-sdk/lib-storage": "^3.1045.0",
     "@aws-sdk/s3-request-presigner": "^3.1045.0",
