@@ -50,6 +50,23 @@
                 重新安装
               </a-button>
             </template>
+            <template v-else-if="plugin.id === 'winfsp'">
+              <a-button
+                v-if="plugin.status !== 'ready'"
+                type="primary"
+                :loading="actionLoading[plugin.id]"
+                @click="$emit('installWinFsp', plugin)"
+              >
+                <DownloadOutlined /> 一键安装
+              </a-button>
+              <a-button
+                v-else
+                :loading="actionLoading[plugin.id]"
+                @click="$emit('installWinFsp', plugin)"
+              >
+                重新安装
+              </a-button>
+            </template>
             <template v-else-if="plugin.id === 'mpv'">
               <a-button
                 v-if="plugin.status !== 'ready'"
@@ -218,6 +235,7 @@ export default defineComponent({
     'refresh',
     'toggleEnabled',
     'installRclone',
+    'installWinFsp',
     'installMpv',
     'selectCustomPath',
     'resetCustomPath',

@@ -242,27 +242,38 @@ function readPid(targetId: string): number | null {
   }
 }
 
-function processCommand(pid: number): string {
-  try {
-    if (Platform.windows()) {
-      // 使用 wmic 或快速命令行查询，避免拉起 powershell.exe 造成主线程 3 秒冻结
-      const result = nodeProcess.execFileSync('cmd.exe', [
-        '/c', `wmic process where ProcessId=${pid} get CommandLine 2>nul`,
-      ], { windowsHide: true, timeout: 1500, encoding: 'utf8' });
-      return String(result || '').trim();
-    }
-    return String(nodeProcess.execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
-      timeout: 1500, encoding: 'utf8',
-    }) || '').trim();
-  } catch {
-    return '';
+function getProcessExeName(pid: number): string {
+  if (!Platform.windows()) {
+    try {
+      return String(nodeProcess.execFileSync('ps', ['-p', String(pid), '-o', 'comm='], { timeout: 1500, encoding: 'utf8' })).trim();
+    } catch { return ''; }
   }
+  try {
+    const koffi = require('koffi');
+    const kernel32 = koffi.load('kernel32.dll');
+    const OpenProcess = kernel32.func('__stdcall', 'OpenProcess', 'void *', ['uint32', 'bool', 'uint32']);
+    const QueryFullProcessImageNameW = kernel32.func('__stdcall', 'QueryFullProcessImageNameW', 'bool', ['void *', 'uint32', '_Out_ str16', '_Inout_ uint32 *']);
+    const CloseHandle = kernel32.func('__stdcall', 'CloseHandle', 'bool', ['void *']);
+
+    const hProcess = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+    if (!hProcess) return '';
+    try {
+      const sizeBuf = [512];
+      const nameBuf = ' '.repeat(512);
+      if (QueryFullProcessImageNameW(hProcess, 0, nameBuf, sizeBuf)) {
+        return nameBuf.slice(0, sizeBuf[0]);
+      }
+    } finally {
+      CloseHandle(hProcess);
+    }
+  } catch {}
+  return '';
 }
 
 function isManagedRcloneProcess(pid: number, rcPort: number | null): boolean {
-  const command = processCommand(pid).toLowerCase();
-  if (!command || !command.includes('rclone') || !command.includes(' mount')) return false;
-  return !rcPort || command.includes(`--rc-addr=localhost:${rcPort}`) || command.includes(`--rc-addr=127.0.0.1:${rcPort}`);
+  const exe = getProcessExeName(pid).toLowerCase();
+  if (exe && (exe.endsWith('rclone.exe') || exe.includes('rclone'))) return true;
+  return false;
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -295,23 +306,64 @@ function isMountPointAccessible(mountPoint: string): boolean {
   }
 }
 
+/** 强制清理 Windows 映射盘符并通知资源管理器立即删除图标 */
+function removeWindowsDriveMapping(mountPoint: string): void {
+  if (!Platform.windows() || !mountPoint) return;
+  const drive = mountPoint.trim().slice(0, 2).toUpperCase(); // e.g. "Z:"
+  if (!/^[A-Z]:$/.test(drive)) return;
+
+  // 1. WNetCancelConnection2W (直接通过 Win32 网络重定向器内核注销盘符，即使有句柄也强行断开)
+  try {
+    const koffi = require('koffi');
+    const mpr = koffi.load('mpr.dll');
+    const WNetCancelConnection2W = mpr.func('__stdcall', 'WNetCancelConnection2W', 'uint32', ['str16', 'uint32', 'bool']);
+    WNetCancelConnection2W(drive, 1 /* CONNECT_UPDATE_PROFILE */, true /* force */);
+  } catch {}
+
+  // 2. DefineDosDeviceW(DDD_REMOVE_DEFINITION) 清除任何符号链接/虚拟设备驱动器映射
+  try {
+    const koffi = require('koffi');
+    const kernel32 = koffi.load('kernel32.dll');
+    const DefineDosDeviceW = kernel32.func('__stdcall', 'DefineDosDeviceW', 'bool', ['uint32', 'str16', 'str16']);
+    DefineDosDeviceW(0x00000002 /* DDD_REMOVE_DEFINITION */, drive, null);
+    DefineDosDeviceW(0x00000004 /* DDD_EXACT_MATCH_ON_REMOVE */ | 0x00000002, drive, null);
+  } catch {}
+
+  // 3. net use /delete /y (清理当前登录会话中的网络连接映射)
+  try {
+    nodeProcess.execSync(`net use ${drive} /delete /y`, { windowsHide: true, timeout: 3000, stdio: 'ignore' });
+  } catch {}
+
+  // 4. SHChangeNotify(SHCNE_DRIVEREMOVED) 通知 Windows Explorer 立即抹除此盘符图标
+  try {
+    if (loadShChangeNotify() && shChangeNotifyFunc) {
+      const SHCNE_DRIVEREMOVED = 0x00000080;
+      const SHCNF_PATHW_FLUSHNOWAIT = 0x1005;
+      shChangeNotifyFunc(SHCNE_DRIVEREMOVED, SHCNF_PATHW_FLUSHNOWAIT, `${drive}\\`, null);
+    }
+  } catch {}
+}
+
 /** 从 pid 文件读取并终止属于当前 target 的 rclone 进程。 */
 function killStaleProcess(mountTargetId: string): void {
   const mountConfigPidFile = resolveRuntimeFile(mountTargetId, 'pid');
   const pid = readPid(mountTargetId);
   const rcPort = readRcPort(mountTargetId);
-  if (pid && isManagedRcloneProcess(pid, rcPort)) {
-    try {
-      if (Platform.windows()) {
-        nodeProcess.execFileSync('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true, timeout: 3000 });
-      } else {
-        process.kill(pid, 'SIGKILL');
-      }
-    } catch { /* 进程可能已退出 */ }
-    try { nodeFs.unlinkSync(mountConfigPidFile); } catch {}
-  } else if (pid && isProcessAlive(pid)) {
-    console.warn(`[MOUNT] skip killing unverified pid ${pid} for target ${mountTargetId}`);
-    return;
+  if (pid && isProcessAlive(pid)) {
+    if (isManagedRcloneProcess(pid, rcPort) || !Platform.windows()) {
+      try {
+        if (Platform.windows()) {
+          try { process.kill(pid, 'SIGKILL'); } catch {}
+          nodeProcess.execFileSync('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true, timeout: 3000, stdio: 'ignore' });
+        } else {
+          process.kill(pid, 'SIGKILL');
+        }
+      } catch { /* 进程可能已退出 */ }
+      try { nodeFs.unlinkSync(mountConfigPidFile); } catch {}
+    } else {
+      console.warn(`[MOUNT] skip killing unverified pid ${pid} for target ${mountTargetId}`);
+      return;
+    }
   } else {
     try { nodeFs.unlinkSync(mountConfigPidFile); } catch {}
   }
@@ -322,16 +374,9 @@ async function quitViaRc(mountTargetId: string): Promise<void> {
   try {
     const rcPort = readRcPort(mountTargetId);
     if (rcPort) {
-      const fuseBin = store.get("app.openAtLogin.fuseBin") as string || "";
-      if (fuseBin) {
-        await new Promise<void>((resolve) => {
-          const proc = nodeProcess.spawn(fuseBin, ["rc", "core/quit", `--rc-addr=localhost:${rcPort}`], { windowsHide: true, stdio: 'ignore' });
-          proc.on('exit', () => resolve());
-          proc.on('error', () => resolve());
-          setTimeout(resolve, 3000);
-        });
-        await sleep(1000);
-      }
+      // 优先通过内置 HTTP POST 直接发送 rclone /core/quit
+      await rcPost(rcPort, 'core/quit', {});
+      await sleep(500);
     }
   } catch {}
 }
@@ -339,22 +384,7 @@ async function quitViaRc(mountTargetId: string): Promise<void> {
 /** Windows: 清理幽灵盘符（盘符存在但不可访问） */
 async function cleanupGhostDrive(mountPoint: string): Promise<void> {
   if (!Platform.windows() || !mountPoint) return;
-  const drives = await Fuse.driveList();
-  if (!drives.includes(mountPoint)) return;
-  if (!isMountPointAccessible(mountPoint)) {
-    // 盘符存在但不可访问，是幽灵盘符
-    try {
-      const fuseBin = store.get("app.openAtLogin.fuseBin") as string || "";
-      if (fuseBin) {
-        nodeProcess.execFileSync(fuseBin, ["unmount", mountPoint], { windowsHide: true, timeout: 5000, stdio: 'ignore' });
-        await sleep(500);
-      }
-    } catch {}
-    try {
-      nodeProcess.execSync(`net use ${mountPoint} /delete /y`, { windowsHide: true, timeout: 3000 });
-      await sleep(500);
-    } catch {}
-  }
+  removeWindowsDriveMapping(mountPoint);
 }
 
 export class Fuse {
@@ -514,7 +544,20 @@ export class Fuse {
 
       if (fuseBin.length == 0) {
         scrubMountConfigSecrets(mountConfigFile);
-        return { success: false, desc: "请前往设置选择挂载程序" }
+        return { success: false, desc: "请前往插件中心安装或选择 rclone 挂载程序" }
+      }
+
+      if (Platform.windows()) {
+        try {
+          const { isWinFspInstalled } = require('../../common/winfsp-bin');
+          if (!isWinFspInstalled()) {
+            scrubMountConfigSecrets(mountConfigFile);
+            return {
+              success: false,
+              desc: "Windows 本地挂载依赖 WinFsp 内核驱动，请先在【配置中心 -> 扩展插件】中一键安装 WinFsp 驱动。",
+            };
+          }
+        } catch {}
       }
 
       if (!mountTarget.mountPoint || mountTarget.mountPoint.trim().length === 0) {
@@ -658,33 +701,31 @@ export class Fuse {
   private static async umountInternal(connection: Connection, mountTarget: MountTarget, options: { forgetAutoMount?: boolean } = {}): Promise<FuseUmountResponse> {
     Fuse.setRuntimeStatus(mountTarget.id, 'unmounting');
     try {
-      await quitViaRc(mountTarget.id);
-      await sleep(1000);
-      let pid = readPid(mountTarget.id);
-      let rcPort = readRcPort(mountTarget.id);
-      let stillRunning = !!pid && isManagedRcloneProcess(pid, rcPort);
-      let unverifiedRunning = hasLiveUnverifiedProcess(mountTarget.id);
-      if (rcPort && await Fuse.rcAlive(mountTarget.id)) stillRunning = true;
-      if (stillRunning && !unverifiedRunning) {
-        killStaleProcess(mountTarget.id);
-        await sleep(1500);
-        pid = readPid(mountTarget.id);
-        rcPort = readRcPort(mountTarget.id);
-        stillRunning = !!pid && isManagedRcloneProcess(pid, rcPort);
-        unverifiedRunning = hasLiveUnverifiedProcess(mountTarget.id);
-        if (rcPort && await Fuse.rcAlive(mountTarget.id)) stillRunning = true;
+      // 1. 如果配置了 Windows 挂载盘符，调用 rclone rc 的 mount/unmount 接口显式释放 WinFsp 驱动句柄
+      const rcPort = readRcPort(mountTarget.id);
+      if (rcPort && mountTarget.mountPoint) {
+        try {
+          await rcPost(rcPort, 'mount/unmount', { mountPoint: mountTarget.mountPoint });
+          await sleep(300);
+        } catch {}
       }
 
+      // 2. 通过 RC 端口发送 core/quit 让 rclone 退出
+      await quitViaRc(mountTarget.id);
+      await sleep(500);
+
+      // 3. 检查残留进程并强制清理
+      let pid = readPid(mountTarget.id);
+      if (pid && isProcessAlive(pid)) {
+        killStaleProcess(mountTarget.id);
+        await sleep(500);
+      }
+
+      // 4. 强制从 Windows 内核中注销网络盘符，并通知资源管理器立即删除盘符图标
       if (Platform.windows() && mountTarget.mountPoint) {
-        await cleanupGhostDrive(mountTarget.mountPoint);
+        removeWindowsDriveMapping(mountTarget.mountPoint);
       }
-      if (stillRunning || unverifiedRunning) {
-        const desc = unverifiedRunning
-          ? '卸载失败：发现无法确认归属的运行中进程，请先人工检查'
-          : '卸载失败：rclone 进程仍在运行，请稍后重试';
-        Fuse.setRuntimeStatus(mountTarget.id, 'error', desc);
-        return { success: false, desc };
-      }
+
       for (const suffix of ['pid', 'rc', 'conf', 'log']) {
         try { nodeFs.unlinkSync(runtimeFilePath(mountTarget.id, suffix)); } catch {}
         try { nodeFs.unlinkSync(legacyRuntimeFilePath(mountTarget.id, suffix)); } catch {}
@@ -696,6 +737,9 @@ export class Fuse {
       Fuse.setRuntimeStatus(mountTarget.id, 'unmounted');
       return { success: true };
     } catch (error: any) {
+      if (Platform.windows() && mountTarget.mountPoint) {
+        removeWindowsDriveMapping(mountTarget.mountPoint);
+      }
       const desc = error?.message || String(error);
       Fuse.setRuntimeStatus(mountTarget.id, 'error', desc);
       return { success: false, desc };

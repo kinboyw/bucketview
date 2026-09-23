@@ -364,6 +364,9 @@ contextBridge.exposeInMainWorld('native', {
   async ensurePluginRclone(preferredPath?: string): Promise<any> {
     return ipcRenderer.invoke('plugin-ensure-rclone', preferredPath);
   },
+  async ensurePluginWinFsp(): Promise<any> {
+    return ipcRenderer.invoke('plugin-ensure-winfsp');
+  },
   async ensurePluginMpv(): Promise<any> {
     return ipcRenderer.invoke('plugin-ensure-mpv');
   },

@@ -195,6 +195,7 @@ export interface PreloadNative {
   getPlugins?: () => Promise<any[]>;
   updatePluginConfig?: (id: string, updates: any) => Promise<any>;
   ensurePluginRclone?: (preferredPath?: string) => Promise<{ success: boolean; path?: string; message?: string; source?: string; version?: string }>;
+  ensurePluginWinFsp?: () => Promise<{ success: boolean; path?: string; message?: string; source?: string; version?: string }>;
   ensurePluginMpv?: () => Promise<{ success: boolean; path?: string; message?: string; source?: string; version?: string }>;
   encryptSecret?: (value: string) => string;
   decryptSecret?: (value: string) => string;

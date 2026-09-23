@@ -572,6 +572,7 @@
       v-if="configDrawerVisible"
       v-model:open="configDrawerVisible"
       :initial-connection-id="settingsTargetConnectionId"
+      :mount-states="mountStatusMap"
       @mountChanged="refreshMountStatus"
     />
 
@@ -3079,6 +3080,9 @@ export default defineComponent({
 
     const tableHasSelected = computed(() => tableState.selectedRowKeys.length > 0);
     const configDrawerVisible = ref(false);
+    watch(configDrawerVisible, (val) => {
+      if (val) refreshMountStatus();
+    });
     const configFabHover = ref(false);
 
     const activeConfigEnabled = computed(() => {

@@ -1,4 +1,4 @@
-export type PluginId = 'rclone' | 'mpv';
+export type PluginId = 'rclone' | 'mpv' | 'winfsp';
 
 export type PluginSource = 'system' | 'managed' | 'custom';
 

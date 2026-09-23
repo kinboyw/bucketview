@@ -466,6 +466,11 @@ async function createWindow() {
     return pluginManager.ensureRclone(preferredPath);
   });
 
+  try { ipcMain.removeHandler('plugin-ensure-winfsp'); } catch {}
+  ipcMain.handle('plugin-ensure-winfsp', async () => {
+    return pluginManager.ensureWinFsp();
+  });
+
   try { ipcMain.removeHandler('plugin-ensure-mpv'); } catch {}
   ipcMain.handle('plugin-ensure-mpv', async () => {
     return pluginManager.ensureMpv();

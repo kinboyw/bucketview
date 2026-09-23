@@ -6,6 +6,7 @@ import { PluginMeta, PluginId, PluginEnsureResult } from './types';
 import { ensureRcloneBinary, managedRclonePath, bundledRclonePath } from '../rclone-bin';
 import { findSystemMpv, playWithMpv, MpvPlayOptions } from '../mpv-player';
 import { downloadAndExtractMpv, managedMpvPath } from '../mpv-bin';
+import { isWinFspInstalled, downloadAndInstallWinFsp, WINFSP_VERSION } from '../winfsp-bin';
 import Store from 'electron-store';
 import { logger } from '../logger';
 
@@ -52,11 +53,33 @@ export class PluginManager {
    * 获取所有插件元数据及当前运行状态
    */
   public async getPlugins(): Promise<PluginMeta[]> {
-    const [rcloneMeta, mpvMeta] = await Promise.all([
-      this.getRcloneMeta(),
-      this.getMpvMeta(),
-    ]);
-    return [rcloneMeta, mpvMeta];
+    const list = [
+      await this.getRcloneMeta(),
+      await this.getMpvMeta(),
+    ];
+    if (process.platform === 'win32') {
+      list.push(await this.getWinFspMeta());
+    }
+    return list;
+  }
+
+  /**
+   * 检查并组装 WinFsp 驱动信息
+   */
+  public async getWinFspMeta(): Promise<PluginMeta> {
+    const installed = isWinFspInstalled();
+    return {
+      id: 'winfsp',
+      name: 'Windows 文件系统驱动 (WinFsp)',
+      category: 'filesystem',
+      description: 'Windows 平台用户态文件系统内核驱动（FUSE Provider），rclone 挂载本地虚拟盘符的必需依赖底层。',
+      supportedPlatforms: ['Windows'],
+      enabled: true,
+      status: installed ? 'ready' : 'missing',
+      source: installed ? 'system' : undefined,
+      version: installed ? WINFSP_VERSION : undefined,
+      config: {},
+    };
   }
 
   /**
@@ -258,6 +281,14 @@ export class PluginManager {
       success: false,
       message: result.message || 'rclone 下载或准备失败',
     };
+  }
+
+  /**
+   * 确保 WinFsp 就绪（支持自动下载并静默安装 MSI）
+   */
+  public async ensureWinFsp(): Promise<PluginEnsureResult> {
+    const userDataDir = app.getPath('userData');
+    return downloadAndInstallWinFsp(userDataDir);
   }
 
   /**

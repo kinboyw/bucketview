@@ -11,6 +11,8 @@
         :active-connection-id="selectedConnId"
         :mount-targets="configStore.mountTargets"
         :mount-states="mountStates"
+        :available-drives="availableDrives"
+        :is-windows="isWindows"
         @select-connection="selectedConnId = $event"
         @save-connection="handleSaveConnectionFromInline"
         @test-connection="handleTestConnectionFromInline"
@@ -18,12 +20,12 @@
         @share-connection="handleShareConnection"
         @import-menu-click="handleImportMenuClick"
         @toggle-connection-enable="handleConnectionEnableChange"
-        @add-target="handleAddTarget"
-        @edit-target="handleEditTarget"
+        @save-target="handleSaveTargetFromInline"
         @delete-target="handleDeleteTarget"
         @mount="handleMount"
         @umount="handleUmount"
         @open-local-folder="handleOpenLocalFolder"
+        @select-cache-dir="handleSelectCacheDir"
       />
     </template>
 
@@ -37,6 +39,7 @@
         @refresh="loadPluginsList"
         @toggle-enabled="handleTogglePluginEnabled"
         @install-rclone="handleDownloadRclonePlugin"
+        @install-winfsp="handleInstallWinFspPlugin"
         @install-mpv="handleInstallMpvPlugin"
         @select-custom-path="handleSelectPluginCustomPath"
         @reset-custom-path="handleResetPluginCustomPath"
@@ -316,44 +319,6 @@
       :message="`识别成功: ${shareImportPreview.id} (${shareImportPreview.endpoint})`"
     />
   </a-modal>
-
-  <!-- 添加/编辑挂载 Modal -->
-  <a-modal
-    :open="targetModalState.visible"
-    width="480px"
-    :title="targetModalState.editingTargetId ? '编辑磁盘挂载点' : '添加本地挂载点'"
-    okText="保存"
-    cancelText="取消"
-    @ok="handleTargetModalOk"
-    @cancel="targetModalState.visible = false"
-  >
-    <a-form layout="vertical">
-      <div style="display: flex; gap: 12px;">
-        <a-form-item label="选择 Bucket" required style="flex: 1">
-          <a-input v-model:value="targetModalFormState.bucket" placeholder="例如: my-bucket" />
-        </a-form-item>
-        <a-form-item label="挂载路径/盘符" required style="flex: 1">
-          <a-select
-            v-if="isWindows"
-            v-model:value="targetModalFormState.mountPoint"
-            placeholder="选择可用驱动器盘符"
-          >
-            <a-select-option v-for="drive in availableDrives" :key="drive" :value="drive">{{ drive }}</a-select-option>
-          </a-select>
-          <a-input v-else v-model:value="targetModalFormState.mountPoint" placeholder="/mnt/bucket" />
-        </a-form-item>
-      </div>
-      <a-form-item label="前缀目录（可选）">
-        <a-input v-model:value="targetModalFormState.pathPrefix" placeholder="例如: docs/2026" />
-      </a-form-item>
-      <a-form-item label="专属缓存路径">
-        <div style="display: flex; gap: 8px;">
-          <a-input v-model:value="targetModalFormState.cacheDirectory" placeholder="留空使用系统设置中的默认缓存" />
-          <a-button @click="handleSelectCacheDir">浏览</a-button>
-        </div>
-      </a-form-item>
-    </a-form>
-  </a-modal>
 </template>
 
 <script lang="ts">
@@ -419,6 +384,7 @@ export default defineComponent({
   props: {
     open: { type: Boolean, default: false },
     initialConnectionId: { type: String, default: '' },
+    mountStates: { type: Object as () => Record<string, boolean>, default: undefined },
   },
   emits: ['update:open', 'mountChanged'],
   setup(props, { emit }) {
@@ -440,7 +406,22 @@ export default defineComponent({
     const closeBehaviorValue = ref<'hide' | 'exit'>(settingStore.closeBehavior === 'exit' ? 'exit' : 'hide');
     const confirmBeforeExitValue = ref<boolean>(settingStore.confirmBeforeExit !== false);
 
-    const mountStates = reactive<Record<string, boolean>>({});
+    const localMountStates = reactive<Record<string, boolean>>({});
+    const mountStates = props.mountStates || localMountStates;
+
+    const refreshLocalMountStates = () => {
+      for (const target of configStore.mountTargets) {
+        if (target.mountPoint && target.mountPoint.length > 0) {
+          fuse.getMountStatus(_.cloneDeep(toRaw(target))).then((res: any) => {
+            mountStates[target.id] = res.status === 'mounted';
+          }).catch(() => {
+            mountStates[target.id] = false;
+          });
+        } else {
+          mountStates[target.id] = false;
+        }
+      }
+    };
     const bucketOptions = ref<string[]>([]);
     const bucketFetching = ref(false);
     const availableDrives = ref<string[]>([]);
@@ -567,6 +548,24 @@ export default defineComponent({
         }
       } catch (e: any) {
         notification.error({ message: '下载异常', description: e.message });
+      } finally {
+        pluginActionLoading[plugin.id] = false;
+      }
+    };
+
+    const handleInstallWinFspPlugin = async (plugin: any) => {
+      pluginActionLoading[plugin.id] = true;
+      try {
+        notification.info({ message: '正在下载并准备安装 WinFsp 内核驱动…', description: 'Windows 挂载必备底层组件，请稍候…' });
+        const res = await native.ensurePluginWinFsp?.();
+        if (res?.success) {
+          notification.success({ message: 'WinFsp 驱动安装就绪！' });
+          await loadPluginsList();
+        } else {
+          notification.warning({ message: '驱动安装未完全成功', description: res?.message });
+        }
+      } catch (e: any) {
+        notification.error({ message: '安装异常', description: e.message });
       } finally {
         pluginActionLoading[plugin.id] = false;
       }
@@ -906,45 +905,26 @@ export default defineComponent({
       mcImportVisible.value = false;
     };
 
-    // ── 挂载点管理 ──
-    const targetModalState = reactive({ visible: false, connectionId: '', editingTargetId: '' });
-    const targetModalFormState = ref<MountTarget>({ id: '', connectionId: '', bucket: '', mountPoint: '', pathPrefix: '', cacheDirectory: '', autoMount: false });
-
-    const handleAddTarget = (conn: Connection) => {
-      targetModalState.connectionId = conn.id;
-      targetModalState.editingTargetId = '';
-      targetModalFormState.value = {
-        id: `target-${Date.now()}`,
-        connectionId: conn.id,
-        bucket: conn.bucket || '',
-        pathPrefix: conn.pathPrefix || '',
-        mountPoint: isWindows ? (availableDrives.value[0] || 'Z:') : '',
-        cacheDirectory: '',
-        autoMount: false,
-      };
-      targetModalState.visible = true;
-    };
-
-    const handleEditTarget = (conn: Connection, target: MountTarget) => {
-      targetModalState.connectionId = conn.id;
-      targetModalState.editingTargetId = target.id;
-      targetModalFormState.value = _.cloneDeep(toRaw(target));
-      targetModalState.visible = true;
+    // ── 挂载点内联保存 ──
+    const handleSaveTargetFromInline = (target: MountTarget, done: () => void) => {
+      try {
+        if (!target.bucket || !target.mountPoint) {
+          notification.error({ message: '请完整填写存储桶与挂载点' });
+          done();
+          return;
+        }
+        configStore.addMountTarget(_.cloneDeep(toRaw(target)));
+        notification.success({ message: '挂载配置已保存' });
+        done();
+      } catch (err: any) {
+        notification.error({ message: '保存挂载失败', description: err.message });
+        done();
+      }
     };
 
     const handleDeleteTarget = (targetId: string) => {
       configStore.removeMountTarget(targetId);
       notification.success({ message: '已删除挂载点' });
-    };
-
-    const handleTargetModalOk = () => {
-      if (!targetModalFormState.value.bucket || !targetModalFormState.value.mountPoint) {
-        notification.error({ message: '请完整填写 Bucket 与挂载点' });
-        return;
-      }
-      configStore.addMountTarget(_.cloneDeep(toRaw(targetModalFormState.value)));
-      targetModalState.visible = false;
-      notification.success({ message: '挂载点已保存' });
     };
 
     const handleMount = async (conn: Connection, target: MountTarget) => {
@@ -964,6 +944,7 @@ export default defineComponent({
         notification.error({ message: '挂载异常', description: e.message });
       } finally {
         mountStates[target.id + '_loading'] = false;
+        refreshLocalMountStates();
       }
     };
 
@@ -982,6 +963,7 @@ export default defineComponent({
         notification.error({ message: '卸载异常', description: e.message });
       } finally {
         mountStates[target.id + '_loading'] = false;
+        refreshLocalMountStates();
       }
     };
 
@@ -989,9 +971,13 @@ export default defineComponent({
       if (target.mountPoint) native.openLocalFolder(target.mountPoint);
     };
 
-    const handleSelectCacheDir = () => {
+    const handleSelectCacheDir = (cb?: (dir: string) => void) => {
       const paths = native.getLocalSaveFolder();
-      if (paths?.length) targetModalFormState.value.cacheDirectory = paths[0];
+      if (paths?.length) {
+        if (typeof cb === 'function') {
+          cb(paths[0]);
+        }
+      }
     };
 
     // ── 系统设置同步 ──
@@ -1044,6 +1030,8 @@ export default defineComponent({
 
     onMounted(() => {
       native.ipc('handler-updater', handleAboutUpdater);
+      refreshLocalMountStates();
+      emit('mountChanged');
       if (isWindows) {
         fuse.driveList().then((occupied) => {
           availableDrives.value = defaultDrives.filter(d => !occupied.includes(d));
@@ -1078,6 +1066,7 @@ export default defineComponent({
       handleSelectPluginCustomPath,
       handleResetPluginCustomPath,
       handleDownloadRclonePlugin,
+      handleInstallWinFspPlugin,
       handleInstallMpvPlugin,
       handleShowMpvInstallGuide,
       appVersion,
@@ -1130,12 +1119,8 @@ export default defineComponent({
       handleMcImportFile,
       handleMcImportCancel,
       handleMcImport,
-      targetModalState,
-      targetModalFormState,
-      handleAddTarget,
-      handleEditTarget,
+      handleSaveTargetFromInline,
       handleDeleteTarget,
-      handleTargetModalOk,
       handleMount,
       handleUmount,
       handleOpenLocalFolder,

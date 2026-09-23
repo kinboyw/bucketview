@@ -312,9 +312,49 @@
           <div class="detail-section">
             <div class="section-heading-row">
               <h4 class="section-heading">本地磁盘挂载点 (FUSE 映射)</h4>
-              <a-button type="primary" size="small" @click="$emit('addTarget', selectedConnection)">
+              <a-button v-if="!targetEditing" type="primary" size="small" @click="startCreateTarget">
                 <PlusOutlined /> 新建挂载
               </a-button>
+            </div>
+
+            <!-- 内联挂载编辑/新建卡片：平铺展开在挂载区域上方 -->
+            <div v-if="targetEditing" class="inline-target-editor">
+              <div class="target-editor-head">
+                <span class="editor-title">{{ targetForm.id && isEditTarget ? '编辑挂载配置' : '新建挂载配置' }}</span>
+                <div class="editor-actions">
+                  <a-button size="small" @click="cancelTargetEdit">取消</a-button>
+                  <a-button type="primary" size="small" :loading="targetSaving" @click="submitTargetEdit">保存挂载</a-button>
+                </div>
+              </div>
+
+              <div class="form-compact-grid">
+                <a-form-item label="存储桶 (Bucket)" required class="form-compact-item">
+                  <a-input v-model:value="targetForm.bucket" size="small" placeholder="例如: my-bucket" />
+                </a-form-item>
+
+                <a-form-item label="挂载盘符 / 路径" required class="form-compact-item">
+                  <a-select
+                    v-if="isWindows"
+                    v-model:value="targetForm.mountPoint"
+                    size="small"
+                    placeholder="选择可用盘符"
+                  >
+                    <a-select-option v-for="d in availableDrives" :key="d" :value="d">{{ d }}</a-select-option>
+                  </a-select>
+                  <a-input v-else v-model:value="targetForm.mountPoint" size="small" placeholder="/mnt/bucket" />
+                </a-form-item>
+
+                <a-form-item label="限制前缀路径 (可选)" class="form-compact-item">
+                  <a-input v-model:value="targetForm.pathPrefix" size="small" placeholder="例如: docs/2026" />
+                </a-form-item>
+
+                <a-form-item label="专属缓存目录 (可选)" class="form-compact-item">
+                  <div style="display: flex; gap: 6px;">
+                    <a-input v-model:value="targetForm.cacheDirectory" size="small" placeholder="留空使用系统默认" />
+                    <a-button size="small" @click="$emit('selectCacheDir', (dir: string) => targetForm.cacheDirectory = dir)">浏览</a-button>
+                  </div>
+                </a-form-item>
+              </div>
             </div>
 
             <div class="targets-grid">
@@ -327,7 +367,10 @@
                   <div class="target-card-top">
                     <HddOutlined class="target-icon" />
                     <span class="target-mountpoint">{{ target.mountPoint || '未指定盘符' }}</span>
-                    <span v-if="mountStates[target.id]" class="badge badge-mounted">
+                    <span v-if="mountStates[target.id + '_loading']" class="badge badge-mounting">
+                      <span class="badge-dot badge-dot-breathing"></span>处理中
+                    </span>
+                    <span v-else-if="mountStates[target.id]" class="badge badge-mounted">
                       <span class="badge-dot badge-dot-green"></span>已挂载
                     </span>
                     <span v-else class="badge badge-off">未挂载</span>
@@ -338,7 +381,7 @@
                 </div>
 
                 <div class="target-card-actions">
-                  <a-tooltip v-if="mountStates[target.id]" title="在文件管理器中打开">
+                  <a-tooltip v-if="mountStates[target.id] && !mountStates[target.id + '_loading']" title="在文件管理器中打开">
                     <a-button size="small" @click="$emit('openLocalFolder', target)">
                       <FolderOpenOutlined />
                     </a-button>
@@ -348,26 +391,29 @@
                     v-if="!mountStates[target.id]"
                     type="primary"
                     size="small"
-                    :disabled="!target.mountPoint || mountStates[target.id + '_loading']"
+                    :loading="mountStates[target.id + '_loading']"
+                    :disabled="!target.mountPoint"
                     @click="$emit('mount', selectedConnection, target)"
                   >
-                    <PlayCircleOutlined /> 挂载
+                    <PlayCircleOutlined v-if="!mountStates[target.id + '_loading']" />
+                    {{ mountStates[target.id + '_loading'] ? '挂载中' : '挂载' }}
                   </a-button>
                   <a-button
                     v-else
                     danger
                     size="small"
-                    :disabled="mountStates[target.id + '_loading']"
+                    :loading="mountStates[target.id + '_loading']"
                     @click="$emit('umount', selectedConnection, target)"
                   >
-                    <CloseSquareOutlined /> 卸载
+                    <CloseSquareOutlined v-if="!mountStates[target.id + '_loading']" />
+                    {{ mountStates[target.id + '_loading'] ? '卸载中' : '卸载' }}
                   </a-button>
 
                   <a-dropdown :trigger="['click']">
                     <a-button size="small"><MoreOutlined /></a-button>
                     <template #overlay>
                       <a-menu>
-                        <a-menu-item key="edit" @click="$emit('editTarget', selectedConnection, target)">
+                        <a-menu-item key="edit" @click="startEditTarget(target)">
                           <EditOutlined /> 编辑挂载配置
                         </a-menu-item>
                         <a-menu-divider />
@@ -380,9 +426,9 @@
                 </div>
               </div>
 
-              <div v-if="getTargets(selectedConnection.id).length === 0" class="empty-targets-box">
+              <div v-if="getTargets(selectedConnection.id).length === 0 && !targetEditing" class="empty-targets-box">
                 <span class="empty-tip">当前连接尚未绑定任何本地虚拟驱动器</span>
-                <a-button size="small" @click="$emit('addTarget', selectedConnection)">
+                <a-button size="small" @click="startCreateTarget">
                   <PlusOutlined /> 新建挂载
                 </a-button>
               </div>
@@ -456,6 +502,8 @@ export default defineComponent({
     activeConnectionId: { type: String, default: '' },
     mountTargets: { type: Array as () => MountTarget[], default: () => [] },
     mountStates: { type: Object as () => Record<string, boolean>, default: () => ({}) },
+    availableDrives: { type: Array as () => string[], default: () => [] },
+    isWindows: { type: Boolean, default: true },
   },
   emits: [
     'selectConnection',
@@ -465,12 +513,12 @@ export default defineComponent({
     'importMenuClick',
     'toggleConnectionEnable',
     'testConnection',
-    'addTarget',
-    'editTarget',
+    'saveTarget',
     'deleteTarget',
     'mount',
     'umount',
     'openLocalFolder',
+    'selectCacheDir',
   ],
   setup(props, { emit }) {
     const searchKeyword = ref('');
@@ -483,6 +531,56 @@ export default defineComponent({
     const advancedOpen = ref(false);
     const scannedBuckets = ref<string[]>([]);
     const scanningBuckets = ref(false);
+
+    // ── 挂载点内联编辑/新建状态 ──
+    const targetEditing = ref(false);
+    const isEditTarget = ref(false);
+    const targetSaving = ref(false);
+    const targetForm = reactive<MountTarget>({
+      id: '',
+      connectionId: '',
+      bucket: '',
+      mountPoint: '',
+      pathPrefix: '',
+      cacheDirectory: '',
+      autoMount: false,
+    });
+
+    const startCreateTarget = () => {
+      if (!selectedConnection.value) return;
+      targetEditing.value = true;
+      isEditTarget.value = false;
+      const defaultDrive = props.availableDrives[0] || (props.isWindows ? 'Z:' : '');
+      Object.assign(targetForm, {
+        id: `target-${Date.now()}`,
+        connectionId: selectedConnection.value.id,
+        bucket: selectedConnection.value.bucket || '',
+        pathPrefix: selectedConnection.value.pathPrefix || '',
+        mountPoint: defaultDrive,
+        cacheDirectory: '',
+        autoMount: false,
+      });
+    };
+
+    const startEditTarget = (target: MountTarget) => {
+      targetEditing.value = true;
+      isEditTarget.value = true;
+      Object.assign(targetForm, _.cloneDeep(toRaw(target)));
+    };
+
+    const cancelTargetEdit = () => {
+      targetEditing.value = false;
+    };
+
+    const submitTargetEdit = () => {
+      if (!targetForm.bucket || !targetForm.mountPoint) return;
+      targetSaving.value = true;
+      const payload = _.cloneDeep(toRaw(targetForm));
+      emit('saveTarget', payload, () => {
+        targetSaving.value = false;
+        targetEditing.value = false;
+      });
+    };
 
     const filterBucketOption = (input: string, option: any) => {
       const val = option?.value || option?.label || '';
@@ -668,6 +766,14 @@ export default defineComponent({
       scanningBuckets,
       filterBucketOption,
       scanBuckets,
+      targetEditing,
+      isEditTarget,
+      targetSaving,
+      targetForm,
+      startCreateTarget,
+      startEditTarget,
+      cancelTargetEdit,
+      submitTargetEdit,
       formRef,
       saving,
       testing,
@@ -882,6 +988,43 @@ export default defineComponent({
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+.inline-target-editor {
+  background: var(--ant-color-bg-container, #ffffff);
+  border: 1px solid var(--ant-color-primary, #2563eb);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+
+  .target-editor-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--ant-color-border-secondary, #e2e8f0);
+
+    .editor-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ant-color-text, #0f172a);
+    }
+
+    .editor-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+  }
+
+  .form-compact-grid {
+    padding: 0;
+    background: transparent;
+    border: none;
+  }
 }
 
 .compact-edit-form {
@@ -1127,6 +1270,35 @@ export default defineComponent({
     font-size: 14px;
     max-width: 360px;
     text-align: center;
+  }
+}
+
+.badge-mounting {
+  background: rgba(245, 158, 11, 0.12) !important;
+  color: #d97706 !important;
+  border: 1px solid rgba(245, 158, 11, 0.3) !important;
+}
+
+.badge-dot-breathing {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  margin-right: 5px;
+  animation: dot-breathing-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes dot-breathing-pulse {
+  0%, 100% {
+    transform: scale(0.9);
+    opacity: 0.4;
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 1;
+    box-shadow: 0 0 6px 2px rgba(245, 158, 11, 0.8);
   }
 }
 </style>
