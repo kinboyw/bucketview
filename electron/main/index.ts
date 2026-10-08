@@ -61,8 +61,19 @@ process.env.PUBLIC = process.env.VITE_DEV_SERVER_URL
 // Disable GPU Acceleration for Windows 7
 if (nodeOs.release().startsWith('6.1')) app.disableHardwareAcceleration()
 
+// 压制 AWS SDK 在 Node 20 下的 2027 年版本维护告警（由 Electron 内部 Node 运行时触发）
+process.env.AWS_SDK_JS_SUPPRESS_MAINTENANCE_MODE_MESSAGE = '1';
+
 // Set application name for Windows 10+ notifications
-if (process.platform === 'win32') app.setAppUserModelId(app.getName())
+if (process.platform === 'win32') {
+  app.setAppUserModelId(app.getName())
+  // 确保 Windows 控制台标准输出使用 UTF-8 编码，防止中文日志打印为乱码
+  try {
+    if (process.stdout && (process.stdout as any).setEncoding) {
+      (process.stdout as any).setEncoding('utf8');
+    }
+  } catch {}
+}
 
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
@@ -435,6 +446,17 @@ async function createWindow() {
     logger.error('renderer', payload?.info || 'renderer-error', payload);
   });
 
+  // ── 收集业务日志（传输、挂载、网络） ──
+  ipcMain.removeAllListeners('app-log');
+  ipcMain.on('app-log', (_event, payload: { level: 'debug' | 'info' | 'warn' | 'error'; scope: string; message: string; meta?: any }) => {
+    if (!payload) return;
+    const { level = 'info', scope = 'app', message = '', meta } = payload;
+    if (level === 'error') logger.error(scope, message, meta);
+    else if (level === 'warn') logger.warn(scope, message, meta);
+    else if (level === 'debug') logger.debug(scope, message, meta);
+    else logger.info(scope, message, meta);
+  });
+
   try { ipcMain.removeHandler('app-get-log-path'); } catch {}
   ipcMain.handle('app-get-log-path', () => {
     return {
@@ -448,6 +470,11 @@ async function createWindow() {
     if (!dir) return { success: false, message: '日志目录不可用' };
     const err = await shell.openPath(dir);
     return err ? { success: false, message: err } : { success: true };
+  });
+
+  try { ipcMain.removeHandler('app-read-logs'); } catch {}
+  ipcMain.handle('app-read-logs', (_event, limit?: number) => {
+    return logger.readRecentLogs(limit || 300);
   });
 
   // ── 统一插件系统 (PluginManager) IPC 通道 ──

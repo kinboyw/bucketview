@@ -69,6 +69,7 @@
                   <span :class="['fab-dot', { 'fab-dot-on': configStore.defaultTargetId === activeConnectionId }]"></span>
                 </div>
                 <div class="fab-menu-sep"></div>
+                <div class="fab-menu-link" @click="transferDrawerVisible = true"><SwapOutlined style="transform: rotate(90deg)" /> 传输列表</div>
                 <div class="fab-menu-link" @click="configDrawerVisible = true"><SettingOutlined /> 配置</div>
                 <div class="fab-menu-link" @click="auditModalVisible = true"><FileTextOutlined /> 日志</div>
                 <div class="fab-bridge"></div>
@@ -170,6 +171,12 @@
                 <a-button class="icon-btn danger-btn" :disabled="!tableHasSelected" @click="handleStorageDeleteObjects()" title="删除">
                   <template #icon><DeleteOutlined /></template>
                 </a-button>
+
+                <a-badge :count="activeTransferCount" :overflow-count="99">
+                  <a-button class="icon-btn" @click="transferDrawerVisible = true" title="查看传输列表">
+                    <template #icon><SwapOutlined style="transform: rotate(90deg)" /></template>
+                  </a-button>
+                </a-badge>
 
               </div>
             </div>
@@ -854,6 +861,16 @@ export default defineComponent({
     };
 
     const activeConnectionId = computed(() => configStore.activeConnectionId);
+
+    const activeTransferCount = computed(() => {
+      const q = transferStore.queue;
+      let count = 0;
+      for (const uid in q) {
+        const item = q[uid];
+        if (item && (item.status === 'running' || item.status === 'waiting')) count++;
+      }
+      return count;
+    });
 
     const activeTabConnectionIds = computed(() => configStore.activeTabConnectionIds);
     const DEFAULT_SIDEBAR_WIDTH = 160;
@@ -3753,6 +3770,10 @@ export default defineComponent({
       pendingTransferProgress.clear();
     };
     const applyTransferProgressPatch = (uid: string, patch: Record<string, any>) => {
+      const current = transferStore.queue[uid];
+      if (current) {
+        Object.assign(current, patch);
+      }
       const prev = pendingTransferProgress.get(uid) || {};
       pendingTransferProgress.set(uid, { ...prev, ...patch });
       if (!transferProgressRaf) {
@@ -4088,16 +4109,12 @@ export default defineComponent({
             completedAt: Date.now(),
           });
           notification['error']({
-            message: `下载失败`,
-            description: event.name,
+            message: `下载失败: ${tmpTransferInfo.name || event.name || '未知文件'}`,
+            description: event.desc ? `${event.desc}（请检查连接配置协议 http/https 或网络状态）` : '网络连接超时或凭据错误',
+            duration: 6,
           });
           break;
         case 'running':
-          // Only update progress if consumedBytes is monotonically increasing
-          // This prevents stale events from old download instances
-          if (tmpTransferInfo.consumedBytes != undefined && event.consumedBytes < tmpTransferInfo.consumedBytes) {
-            return;
-          }
           applyTransferProgressPatch(uid, {
             status: 'running',
             percentage: event.percentage,
@@ -4401,6 +4418,7 @@ export default defineComponent({
       handleTextSaveContent,
       mkdirModalState,
       transferDrawerVisible,
+      activeTransferCount,
       ensureTransferRecordContext,
       domainPathValidationRule,
       onClickBreadCrumb,

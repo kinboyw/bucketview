@@ -190,6 +190,7 @@ export interface PreloadNative {
   setTransferConcurrency?: (value: number) => void;
   getLogPath?: () => Promise<{ file: string; directory: string }>;
   openLogDirectory?: () => Promise<{ success: boolean; message?: string }>;
+  readRecentLogs?: (limit?: number) => Promise<any[]>;
   checkMpvAvailable?: () => Promise<{ available: boolean; path?: string; meta?: any }>;
   playWithMpv?: (payload: { url: string; title?: string }) => Promise<{ success: boolean; message?: string }>;
   getPlugins?: () => Promise<any[]>;
@@ -201,6 +202,7 @@ export interface PreloadNative {
   decryptSecret?: (value: string) => string;
   ipc: (channel: string, listener: (event: IpcRendererEvent, ...args: UpdaterResponse[]) => void) => void;
   ipcSend: (channel: string, ...args: any[]) => void;
+  log?: (level: 'debug' | 'info' | 'warn' | 'error', scope: string, message: string, meta?: any) => void;
   readLocalFile: (path: string) => string;
   writeTempFile: (filename: string, content: string) => string;
 }

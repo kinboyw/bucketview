@@ -1,7 +1,7 @@
 {
   "name": "bucketview",
   "productName": "BucketView",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "main": "dist-electron/main/index.js",
   "description": "A cross-platform desktop client for S3-compatible object storage.",
   "author": "Kinboy",
@@ -27,6 +27,7 @@
     "build:mac": "vite build && electron-builder --mac --x64 --publish never",
     "build:mac:docker": "docker rmi bucketview_macos:$npm_package_version ; docker build -t bucketview_macos:$npm_package_version -f Dockerfile.macos . && docker run -d -it --rm --name bucketview_macos  bucketview_macos:$npm_package_version && docker cp bucketview_macos:/project/release . && docker stop bucketview_macos",
     "build:win": "vite build && electron-builder --win --x64 --publish never",
+    "postinstall": "npm run rebuild:sqlite",
     "rebuild:sqlite": "node -e \"const dir = require('path').dirname(require.resolve('better-sqlite3/package.json')); require('child_process').execSync('npx prebuild-install -r electron -t 30.5.1 --tag-prefix v', { cwd: dir, stdio: 'inherit' });\"",
     "rebuild:native": "npm run rebuild:sqlite",
     "build:linux": "vite build && electron-builder --linux --x64 --publish never",

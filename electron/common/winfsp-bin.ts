@@ -17,17 +17,46 @@ export const WINFSP_MSI_URL = `https://github.com/winfsp/winfsp/releases/downloa
 export function isWinFspInstalled(): boolean {
   if (process.platform !== 'win32') return true; // 非 Windows 平台不需要 WinFsp (macOS 依赖 FUSE-T 或 macFUSE)
 
-  // 1. 检查注册表键是否存在
+  const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+  const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+  const windir = process.env['WINDIR'] || 'C:\\Windows';
+
+  // 1. 标准路径和常见自定义安装路径
   const standardPaths = [
-    'C:\\Program Files (x86)\\WinFsp\\bin\\winfsp-x64.dll',
-    'C:\\Program Files\\WinFsp\\bin\\winfsp-x64.dll',
-    'C:\\Windows\\System32\\winfsp-x64.dll',
+    path.join(programFiles, 'WinFsp', 'bin', 'winfsp-x64.dll'),
+    path.join(programFilesX86, 'WinFsp', 'bin', 'winfsp-x64.dll'),
+    path.join(programFilesX86, 'WinFsp', 'bin', 'winfsp-x86.dll'),
+    path.join(windir, 'System32', 'winfsp-x64.dll'),
   ];
   for (const p of standardPaths) {
     if (fs.existsSync(p)) return true;
   }
 
-  // 2. 通过 koffi 加载 winfsp 驱动 dll 探测
+  // 2. 从 Windows 注册表精确读取 WinFsp 安装目录（用户可能安装在非 C 盘，如 D:\、H:\Software\WinSFP 等）
+  try {
+    const regKeys = [
+      'HKLM\\SOFTWARE\\WinFsp',
+      'HKLM\\SOFTWARE\\WOW6432Node\\WinFsp',
+    ];
+    for (const key of regKeys) {
+      try {
+        const stdout = require('node:child_process').execSync(`reg query "${key}" /v InstallDir 2>nul`, {
+          windowsHide: true,
+          timeout: 2000,
+          encoding: 'utf8',
+        });
+        const match = stdout.match(/InstallDir\s+REG_SZ\s+(.+)/i);
+        if (match && match[1]) {
+          const installDir = match[1].trim();
+          if (fs.existsSync(path.join(installDir, 'bin', 'winfsp-x64.dll')) || fs.existsSync(installDir)) {
+            return true;
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+
+  // 3. 通过 koffi 尝试加载系统注册的 winfsp 驱动 dll 探测
   try {
     const koffi = require('koffi');
     const lib = koffi.load('winfsp-x64.dll');
@@ -70,28 +99,32 @@ export async function downloadAndInstallWinFsp(userDataDir: string): Promise<Plu
     await pipeline(stream, createWriteStream(tmpPart));
     fs.renameSync(tmpPart, msiPath);
 
-    // 2. 执行 msiexec 静默安装
-    logger.info('winfsp', 'Running msiexec install...');
+    // 2. 执行 msiexec 安装
+    logger.info('winfsp', 'Running msiexec install...', { msiPath });
     await new Promise<void>((resolve, reject) => {
-      // /qn 静默安装，/norestart 不重启
-      const child = spawn('msiexec.exe', ['/i', msiPath, '/qn', '/norestart'], {
-        windowsHide: true,
+      // /passive 带进度提示，避免全静默 /qn 在部分 Windows 系统上静默被 UAC 拦截或降权失败
+      const child = spawn('msiexec.exe', ['/i', msiPath, '/passive', '/norestart'], {
+        windowsHide: false,
         stdio: 'ignore',
       });
       child.on('error', reject);
       child.on('exit', (code) => {
         // 0: success, 3010: success restart required
         if (code === 0 || code === 3010) resolve();
-        else reject(new Error(`msiexec exited with code ${code}`));
+        else reject(new Error(`msiexec 安装退出，返回码: ${code}`));
       });
     });
 
-    if (isWinFspInstalled()) {
-      logger.info('winfsp', 'WinFsp successfully installed');
-      return { success: true, message: 'WinFsp 驱动已成功安装' };
+    // 等待安装文件落盘生效
+    for (let i = 0; i < 10; i++) {
+      if (isWinFspInstalled()) {
+        logger.info('winfsp', 'WinFsp successfully installed');
+        return { success: true, message: 'WinFsp 驱动已成功安装' };
+      }
+      await new Promise((r) => setTimeout(r, 1000));
     }
 
-    return { success: false, message: 'WinFsp 安装完成但未检测到驱动组件，请以管理员身份重试' };
+    return { success: false, message: 'WinFsp 安装完成但未检测到驱动组件，请检查是否允许了系统权限' };
   } catch (err: any) {
     logger.error('winfsp', 'Failed to install WinFsp', err);
     return {

@@ -24,6 +24,12 @@ import { app, dialog, getCurrentWebContents, shell } from '@electron/remote';
 import nodePath from 'node:path';
 import { Fuse } from './storage/fuse';
 import nodeOs from 'node:os';
+
+// 压制 AWS SDK 在内部 Node 运行时下的维护通知
+try {
+  process.env.AWS_SDK_JS_SUPPRESS_MAINTENANCE_MODE_MESSAGE = '1';
+} catch {}
+
 import { Platform } from '../common';
 import { ensureRcloneBinary, managedRclonePath, bundledRclonePath } from '../common/rclone-bin'
 import { decryptSecret as decryptSecretValue, encryptSecret as encryptSecretValue } from '../common/secret-crypto';
@@ -66,11 +72,8 @@ const storages: { [key: string]: Storage } = { minio: minio };
 // Each worker receives a fresh storage instance for its immutable job context.
 const transferStorages: { [key: string]: () => Storage } = { minio: () => new S3Storage() };
 const eventBus = new EventEmitter();
-let transfer: Transfer | null = null;
-const getTransfer = () => {
-  if (!transfer) transfer = new Transfer(transferStorages, eventBus);
-  return transfer;
-};
+const transfer = new Transfer(transferStorages, eventBus);
+const getTransfer = () => transfer;
 
 const getOptionString = (value: any, fallback: string = '') => typeof value === 'string' ? value : fallback;
 
@@ -123,19 +126,33 @@ contextBridge.exposeInMainWorld('storage', {
   },
   getObject(key: string, options: TransferObjectOption): void {
     const storage = storages[key];
-    getTransfer().Add({
-      type: 'download',
+    const job = {
+      type: 'download' as const,
       ...createTransferJob(key, storage, options),
       forceOverwrite: (options as any).forceOverwrite,
       resumeFrom: (options as any).resumeFrom,
+    };
+    ipcRenderer.send('app-log', {
+      level: 'info',
+      scope: 'transfer',
+      message: `接收到下载请求: ${job.name || job.objectName}`,
+      meta: { uid: job.uid, bucket: job.bucket, endpoint: job.connection?.endpoint, useSSL: job.connection?.useSSL },
     });
+    getTransfer().Add(job);
   },
   putObject(key: string, options: TransferObjectOption): void {
     const storage = storages[key];
-    getTransfer().Add({
-      type: 'upload',
+    const job = {
+      type: 'upload' as const,
       ...createTransferJob(key, storage, options),
+    };
+    ipcRenderer.send('app-log', {
+      level: 'info',
+      scope: 'transfer',
+      message: `接收到上传请求: ${job.name || job.objectName}`,
+      meta: { uid: job.uid, bucket: job.bucket, endpoint: job.connection?.endpoint, useSSL: job.connection?.useSSL },
     });
+    getTransfer().Add(job);
   },
   listObjects(key: string, prefix: string, startAfter: string, options?: { abortSignal?: AbortSignal }): Promise<ListObjectsResponse> {
     return storages[key]?.listObjects(prefix, startAfter, options);
@@ -349,6 +366,9 @@ contextBridge.exposeInMainWorld('native', {
   async openLogDirectory(): Promise<{ success: boolean; message?: string }> {
     return ipcRenderer.invoke('app-open-log-dir');
   },
+  async readRecentLogs(limit?: number): Promise<any[]> {
+    return ipcRenderer.invoke('app-read-logs', limit);
+  },
   async checkMpvAvailable(): Promise<{ available: boolean; path?: string; meta?: any }> {
     return ipcRenderer.invoke('mpv-check-available');
   },
@@ -375,6 +395,9 @@ contextBridge.exposeInMainWorld('native', {
   },
   ipcSend(channel: string, ...args: any[]): void {
     ipcRenderer.send(channel, ...args);
+  },
+  log(level: 'debug' | 'info' | 'warn' | 'error', scope: string, message: string, meta?: any): void {
+    ipcRenderer.send('app-log', { level, scope, message, meta });
   },
   getPathForFile(file: File): string {
     return (file as File & { path?: string }).path || '';

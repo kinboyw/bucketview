@@ -256,6 +256,7 @@ export class PluginManager {
    * 确保 rclone 就绪（支持自动下载）
    */
   public async ensureRclone(preferredPath?: string): Promise<PluginEnsureResult> {
+    logger.info('plugins', 'ensureRclone called', { preferredPath });
     const stored = this.getStoredConfig('rclone');
     const pathCandidate = preferredPath || stored.customPath || '';
     const userDataDir = app.getPath('userData');
@@ -269,6 +270,7 @@ export class PluginManager {
 
     if (result.success && result.path) {
       const version = await this.queryBinaryVersion(result.path, ['version']);
+      logger.info('plugins', 'ensureRclone success', { path: result.path, version });
       return {
         success: true,
         path: result.path,
@@ -277,6 +279,7 @@ export class PluginManager {
       };
     }
 
+    logger.error('plugins', 'ensureRclone failed', result);
     return {
       success: false,
       message: result.message || 'rclone 下载或准备失败',
@@ -287,16 +290,25 @@ export class PluginManager {
    * 确保 WinFsp 就绪（支持自动下载并静默安装 MSI）
    */
   public async ensureWinFsp(): Promise<PluginEnsureResult> {
+    logger.info('plugins', 'ensureWinFsp called');
     const userDataDir = app.getPath('userData');
-    return downloadAndInstallWinFsp(userDataDir);
+    const result = await downloadAndInstallWinFsp(userDataDir);
+    if (result.success) {
+      logger.info('plugins', 'ensureWinFsp success', result);
+    } else {
+      logger.error('plugins', 'ensureWinFsp failed', result);
+    }
+    return result;
   }
 
   /**
    * 自动安装或准备 MPV 播放引擎
    */
   public async ensureMpv(): Promise<PluginEnsureResult> {
+    logger.info('plugins', 'ensureMpv called');
     const currentMeta = await this.getMpvMeta();
     if (currentMeta.status === 'ready' && currentMeta.executablePath) {
+      logger.info('plugins', 'ensureMpv already ready', currentMeta);
       return {
         success: true,
         path: currentMeta.executablePath,
@@ -312,6 +324,7 @@ export class PluginManager {
       logger.info('plugins', 'Attempting direct HTTP download for MPV portable zip...');
       const downloadResult = await downloadAndExtractMpv(userDataDir);
       if (downloadResult.success && downloadResult.path) {
+        logger.info('plugins', 'ensureMpv direct download success', downloadResult);
         return downloadResult;
       }
       logger.warn('plugins', 'Direct MPV download failed, attempting system package manager fallback...', downloadResult.message);

@@ -67,6 +67,7 @@
         @update-close-behavior="handleCloseBehaviorChange"
         @update-confirm-before-exit="handleConfirmBeforeExitChange"
         @open-log-directory="handleOpenLogDirectory"
+        @view-logs="logViewerVisible = true"
       />
     </template>
 
@@ -319,6 +320,9 @@
       :message="`识别成功: ${shareImportPreview.id} (${shareImportPreview.endpoint})`"
     />
   </a-modal>
+
+  <!-- 应用日志实时查看器 Modal -->
+  <LogViewerModal v-model:open="logViewerVisible" />
 </template>
 
 <script lang="ts">
@@ -339,6 +343,7 @@ import ConnectionTab from './tabs/ConnectionTab.vue';
 import PluginTab from './tabs/PluginTab.vue';
 import SystemTab from './tabs/SystemTab.vue';
 import AboutTab from './tabs/AboutTab.vue';
+import LogViewerModal from './modals/LogViewerModal.vue';
 
 const storage = (window as any).storage as PreloadStorage;
 const native = (window as any).native as PreloadNative;
@@ -379,6 +384,7 @@ export default defineComponent({
     PluginTab,
     SystemTab,
     AboutTab,
+    LogViewerModal,
     CopyOutlined,
   },
   props: {
@@ -427,6 +433,7 @@ export default defineComponent({
     const availableDrives = ref<string[]>([]);
     const allBucketsCache = ref<string[]>([]);
     const bucketListFailed = ref(false);
+    const logViewerVisible = ref(false);
 
     // ── 插件状态与交互 ──
     const defaultPluginsList: any[] = [
@@ -1125,6 +1132,7 @@ export default defineComponent({
       handleUmount,
       handleOpenLocalFolder,
       handleSelectCacheDir,
+      logViewerVisible,
       handleSelectDefaultDownloadDirectory,
       handleDefaultDownloadDirectoryChange,
       handleSelectDefaultCacheDirectory,

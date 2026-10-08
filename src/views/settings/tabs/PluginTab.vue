@@ -144,6 +144,24 @@
             </div>
           </template>
 
+          <!-- winfsp 专属说明 -->
+          <template v-if="plugin.id === 'winfsp'">
+            <div class="config-row">
+              <label class="config-label">驱动说明</label>
+              <div class="config-control">
+                <span class="control-hint">WinFsp 为 Windows 系统底层虚拟驱动程序，安装完成后无需配置路径即可被 rclone 自动识别调用。</span>
+              </div>
+            </div>
+            <div class="config-row config-footer-hint">
+              <label class="config-label"></label>
+              <div class="config-control">
+                <a class="manual-guide-link" href="https://winfsp.dev/" target="_blank">
+                  访问 WinFsp 官方网站与更新日志 (https://winfsp.dev)
+                </a>
+              </div>
+            </div>
+          </template>
+
           <!-- mpv 专属配置 -->
           <template v-if="plugin.id === 'mpv'">
             <div class="config-row">

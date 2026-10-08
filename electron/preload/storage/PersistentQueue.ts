@@ -90,10 +90,8 @@ export default class PersistentQueue extends EventEmitter {
     });
 
     this.on('add', () => {
-      if (this.empty) {
-        this.empty = false;
-        if (this.run) this.emit('trigger_next');
-      }
+      this.empty = false;
+      if (this.run) this.emit('trigger_next');
     });
 
     this.on('open', () => { this.opened = true; });
@@ -189,6 +187,7 @@ export default class PersistentQueue extends EventEmitter {
     const info = stmt.run(JSON.stringify(job));
     const id = info.lastInsertRowid as number;
     this.length++;
+    this.hydrateQueue();
     this.emit('add', { id, job });
     return id;
   }

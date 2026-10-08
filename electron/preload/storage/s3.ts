@@ -22,7 +22,19 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import http from 'node:http';
 import https from 'node:https';
+import { ipcRenderer } from 'electron';
+
+try {
+  process.env.AWS_SDK_JS_SUPPRESS_MAINTENANCE_MODE_MESSAGE = '1';
+} catch {}
+
 const logger = new Logger("warn");
+
+function logS3(level: 'info' | 'warn' | 'error', message: string, meta?: any) {
+  try {
+    ipcRenderer.send('app-log', { level, scope: 's3', message, meta });
+  } catch {}
+}
 
 function getProxyAgent(): { httpAgent?: http.Agent; httpsAgent?: https.Agent } {
   try {
@@ -99,9 +111,16 @@ export class S3Storage implements Storage {
     this._virtualBuckets = [];
 
     const agents = getProxyAgent();
+    const endpointUrl = `${connection.useSSL ? 'https' : 'http'}://${connection.endpoint}`;
+    logS3('info', `初始化 S3 客户端: ${connection.id}`, {
+      endpoint: endpointUrl,
+      region: connection.region,
+      pathStyle: connection.pathStyle ?? true,
+      hasSecret: !!connection.accessKeySecret,
+    });
     this.s3Client = new S3Client({
       region: connection.region,
-      endpoint: `${connection.useSSL ? 'https' : 'http'}://${connection.endpoint}`,
+      endpoint: endpointUrl,
       credentials: {
         accessKeyId: connection.accessKeyId,
         secretAccessKey: connection.accessKeySecret,
@@ -109,7 +128,8 @@ export class S3Storage implements Storage {
       },
       forcePathStyle: connection.pathStyle ?? true,
       requestHandler: new NodeHttpHandler({
-        connectionTimeout: 2000,
+        connectionTimeout: 10000,
+        requestTimeout: 0,
         httpAgent: agents.httpAgent,
         httpsAgent: agents.httpsAgent,
       }),
@@ -175,11 +195,32 @@ export class S3Storage implements Storage {
         return;
       }
 
-      const headObjectCommand = new HeadObjectCommand({
-        Bucket: bucket,
-        Key: this.resolveKey(objectName),
+      const key = this.resolveKey(objectName);
+      logS3('info', `发起下载请求 (GetObject): ${bucket}/${key}`, {
+        localPath,
+        bucket,
+        key,
       });
-      const stat = await this.s3Client.send(headObjectCommand);
+
+      let stat: any;
+      try {
+        const headObjectCommand = new HeadObjectCommand({
+          Bucket: bucket,
+          Key: key,
+        });
+        stat = await this.s3Client.send(headObjectCommand);
+      } catch (headErr: any) {
+        const errMsg = headErr?.message || String(headErr);
+        console.error(`[STORAGE] HeadObject failed for ${bucket}/${key}:`, headErr);
+        logS3('error', `读取文件元数据失败 (HeadObject): ${bucket}/${key}`, {
+          error: errMsg,
+          code: headErr?.code || headErr?.name,
+          status: headErr?.$metadata?.httpStatusCode,
+        });
+        cb && cb({ status: "error", desc: `读取文件元数据失败: ${errMsg}` });
+        return;
+      }
+
       const totalBytes = stat.ContentLength || 0;
       const remoteEtag = stat.ETag;
       const remoteVersionId = (stat as any).VersionId;
@@ -391,7 +432,10 @@ export class S3Storage implements Storage {
                 settle('reject', err);
               }
             });
-            writeStream.on('finish', () => {
+            let finalized = false;
+            const finalizeSuccess = () => {
+              if (finalized) return;
+              finalized = true;
               if (cancelled) {
                 reportCancel();
                 const actualSize = downloadOffset + bytesWritten;
@@ -404,12 +448,26 @@ export class S3Storage implements Storage {
               const finalSize = downloadOffset + bytesWritten;
               if (finalSize >= totalBytes) {
                 try {
-                  const fd = nodeFs.openSync(stagingPath, 'r');
-                  nodeFs.fsyncSync(fd);
-                  nodeFs.closeSync(fd);
                   if (stagingPath !== localPath) {
                     try { nodeFs.unlinkSync(localPath); } catch {}
-                    nodeFs.renameSync(stagingPath, localPath);
+                    // Windows 上部分杀软或系统索引可能在文件刚写完时短暂占用，增加重试
+                    let renamed = false;
+                    for (let retry = 0; retry < 5; retry++) {
+                      try {
+                        nodeFs.renameSync(stagingPath, localPath);
+                        renamed = true;
+                        break;
+                      } catch (renameErr: any) {
+                        if (retry < 4 && (renameErr?.code === 'EPERM' || renameErr?.code === 'EBUSY' || renameErr?.code === 'EACCES')) {
+                          nodeProcess.execFileSync('cmd.exe', ['/c', 'ping -n 1 127.0.0.1 >nul'], { windowsHide: true });
+                          continue;
+                        }
+                        throw renameErr;
+                      }
+                    }
+                    if (!renamed) {
+                      nodeFs.renameSync(stagingPath, localPath);
+                    }
                   }
                 } catch (finalizeError: any) {
                   cb && cb({ status: "error", desc: `下载完成但无法保存文件：${finalizeError?.message || finalizeError}` });
@@ -421,6 +479,15 @@ export class S3Storage implements Storage {
                 cb && cb({ status: "error", desc: `下载不完整：${finalSize}/${totalBytes} 字节` });
               }
               settle('resolve');
+            };
+
+            writeStream.on('close', finalizeSuccess);
+            writeStream.on('finish', () => {
+              // Wait for 'close' event so underlying file descriptor is released.
+              // If writeStream is already closed (synchronously), execute finalizeSuccess.
+              if (writeStream.closed) {
+                finalizeSuccess();
+              }
             });
           });
 
@@ -428,8 +495,11 @@ export class S3Storage implements Storage {
           return;
         } catch (err: any) {
           lastError = err;
-          // Only retry on transient/network errors, not on auth or range errors
           const status = err?.$metadata?.httpStatusCode;
+          logS3('warn', `下载流获取异常 (Attempt ${attempt + 1}/${maxRetries + 1}): ${bucket}/${objectName}`, {
+            error: err?.message || String(err),
+            httpStatus: status,
+          });
           if (status === 403 || status === 404 || status === 416) {
             // Auth/range error: don't retry
             break;
@@ -441,11 +511,18 @@ export class S3Storage implements Storage {
 
       // All retries exhausted
       if (cancelFunc && cancelFunc()) cb && cb({ status: "cancel", desc: '下载已取消' });
-      else cb && cb({ status: "error", desc: lastError?.message || '下载失败' });
-    } catch (err) {
-      console.log('[STORAGE] get object api, ' + err)
+      else {
+        const errorDesc = lastError?.message || String(lastError) || '下载失败';
+        console.error(`[STORAGE] getObject all retries failed for ${bucket}/${options.objectName}:`, lastError);
+        logS3('error', `下载彻底失败: ${bucket}/${options.objectName}`, { error: errorDesc });
+        cb && cb({ status: "error", desc: errorDesc });
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      console.error('[STORAGE] getObject top-level catch error:', err);
+      logS3('error', `下载顶层捕获异常: ${err?.message || String(err)}`, { objectName: options.objectName });
       if (cancelFunc && cancelFunc()) cb && cb({ status: "cancel", desc: '下载已取消' });
-      else cb && cb({ status: "error", desc: err.message })
+      else cb && cb({ status: "error", desc: errMsg });
     }
   }
 

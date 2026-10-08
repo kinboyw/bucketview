@@ -130,9 +130,12 @@
           <div class="setting-row">
             <div class="setting-copy">
               <span class="setting-label">本地排错诊断日志</span>
-              <span class="setting-hint">日志仅保存在当前机器，用于排查崩溃、更新及网络故障。</span>
+              <span class="setting-hint">日志仅保存在当前机器，用于排查崩溃、更新、挂载及插件故障。</span>
             </div>
             <div class="setting-ctrl">
+              <a-button type="primary" @click="$emit('viewLogs')">
+                <FileTextOutlined /> 查看应用日志
+              </a-button>
               <a-button @click="$emit('openLogDirectory')">
                 <FolderOpenOutlined /> 打开日志目录
               </a-button>
@@ -150,6 +153,7 @@ import {
   FolderOpenOutlined,
   HddOutlined,
   CloseSquareOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons-vue';
 
 export default defineComponent({
@@ -158,6 +162,7 @@ export default defineComponent({
     FolderOpenOutlined,
     HddOutlined,
     CloseSquareOutlined,
+    FileTextOutlined,
   },
   props: {
     defaultDownloadDirectory: { type: String, default: '' },
@@ -176,6 +181,7 @@ export default defineComponent({
     'updateCloseBehavior',
     'updateConfirmBeforeExit',
     'openLogDirectory',
+    'viewLogs',
   ],
   setup(props) {
     const downloadDir = ref(props.defaultDownloadDirectory);

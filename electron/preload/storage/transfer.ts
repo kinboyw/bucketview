@@ -1,9 +1,16 @@
-import { app } from "electron";
+import { ipcRenderer } from "electron";
+import { app } from "@electron/remote";
 import nodePath from "node:path";
 import nodeFs from "node:fs";
 import { TransferObjectOption, Storage, ProgressCallback, CancelFunction, Connection } from "../types";
 import PersistentQueue from "./PersistentQueue"
 import { decryptConnectionSecrets } from "../../common/secret-crypto";
+
+function logTransfer(level: 'info' | 'warn' | 'error', message: string, meta?: any) {
+  try {
+    ipcRenderer.send('app-log', { level, scope: 'transfer', message, meta });
+  } catch {}
+}
 
 export interface TransferOptions extends TransferObjectOption {
   type: "download" | "upload";
@@ -30,16 +37,6 @@ function resolveTransferConcurrency(): number {
     if (raw) {
       const n = Number(raw)
       if (Number.isFinite(n) && n >= 1) return Math.min(MAX_TRANSFER_CONCURRENCY, Math.floor(n))
-    }
-  } catch {}
-  try {
-    // Prefer main-process persisted preference via electron-store.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const Store = require('electron-store')
-    const store = new Store()
-    const saved = Number(store.get('app.transferConcurrency', DEFAULT_TRANSFER_CONCURRENCY))
-    if (Number.isFinite(saved) && saved >= 1) {
-      return Math.min(MAX_TRANSFER_CONCURRENCY, Math.floor(saved))
     }
   } catch {}
   return DEFAULT_TRANSFER_CONCURRENCY
@@ -103,89 +100,114 @@ export class Transfer {
     this.transferQueue = new PersistentQueue(dbPath, resolveTransferConcurrency())
     this.transferQueue.setDebug(false)
     this.transferQueue.on("next", ({ id, job }) => {
-      const stor = this.storages[job.key || 'minio']()
-      stor.changeConfig(decryptConnectionSecrets(job.connection || {}))
-      stor.setTarget(job.bucket || '', job.pathPrefix)
+      try {
+        const stor = this.storages[job.key || 'minio']()
+        stor.changeConfig(decryptConnectionSecrets(job.connection || {}))
+        stor.setTarget(job.bucket || '', job.pathPrefix)
 
-      // Clear any previous cancel mark for this uid when starting a new job
-      if (job.uid) clearCancel(job.uid);
+        // Clear any previous cancel mark for this uid when starting a new job
+        if (job.uid) clearCancel(job.uid);
 
-      // Update record status to running
-      updateRecord(this.transferQueue, job, 'running');
+        // Update record status to running and notify UI
+        updateRecord(this.transferQueue, job, 'running');
+        logTransfer('info', `开始${job.type === 'download' ? '下载' : '上传'}: ${job.objectName || job.name}`, {
+          uid: job.uid,
+          bucket: job.bucket,
+          totalBytes: job.totalBytes,
+          localPath: job.localPath,
+        });
+        this.eventBus.emit(job.type, { status: 'running', percentage: 0, speed: '', remaining: '', ...job });
 
-      // Create a dynamic cancelFunc that checks the global cancel map
-      const cancelFunc = job.uid ? makeCancelFunc(job.uid) : noop;
+        // Create a dynamic cancelFunc that checks the global cancel map
+        const cancelFunc = job.uid ? makeCancelFunc(job.uid) : noop;
 
-      let handled = false
-      const handleError = (err: any) => {
-        if (handled) return
-        handled = true
-        console.error(`[Transfer] ${job.type} failed for "${job.objectName}":`, err?.message || err)
-        this.transferQueue.addFailed(job)
-        updateRecord(this.transferQueue, job, 'error', err?.message || String(err));
-        this.eventBus.emit(job.type, { status: 'error', desc: err?.message || String(err), ...job })
-      }
-
-      if (job.type == "download") {
-        stor.getObject(
-          { ...job, cancelFunc, forceOverwrite: job.forceOverwrite, resumeFrom: job.resumeFrom },
-          (data: any) => {
-            if (data.status == 'error') {
-              this.transferQueue.addFailed(job)
-              updateRecord(this.transferQueue, job, 'error', data.desc);
-            }
-            if (data.status == 'success') {
-              this.transferQueue.addSucceeded(job)
-              updateRecord(this.transferQueue, job, 'success');
-            }
-            if (data.status == 'cancel') {
-              updateRecord(this.transferQueue, job, 'cancel', data.desc);
-            }
-            this.eventBus.emit('download', {...data, ...job})
-          },
-          cancelFunc
-        )
-          .catch(handleError)
-          .finally(() => {
-            this.eventBus.emit('download', { type: "end", ...job })
-            this.transferQueue.done(id)
-            // Clean up cancel mark after job finishes
-            if (job.uid) clearCancel(job.uid);
+        let handled = false
+        const handleError = (err: any) => {
+          if (handled) return
+          handled = true
+          const errMsg = err?.message || String(err);
+          console.error(`[Transfer] ${job.type} failed for "${job.objectName}":`, errMsg);
+          logTransfer('error', `${job.type === 'download' ? '下载' : '上传'}异常: ${job.objectName || job.name}`, {
+            uid: job.uid,
+            error: errMsg,
           });
-      } else if (job.type == "upload") {
-        stor.putObject(
-          job,
-          (data: any) => {
-            if (data.status == 'error') {
-              this.transferQueue.addFailed(job)
-              updateRecord(this.transferQueue, job, 'error', data.desc);
-            }
-            if (data.status == 'success') {
-              this.transferQueue.addSucceeded(job)
-              updateRecord(this.transferQueue, job, 'success');
-            }
-            if (data.status == 'cancel') {
-              updateRecord(this.transferQueue, job, 'cancel', data.desc);
-            }
-            this.eventBus.emit('upload', {...data, ...job})
-          },
-          cancelFunc
-        )
-          .catch(handleError)
-          .finally(() => {
-            this.eventBus.emit('upload', { type: "end", ...job })
-            this.transferQueue.done(id)
-            if (job.uid) clearCancel(job.uid);
-          });
+          this.transferQueue.addFailed(job)
+          updateRecord(this.transferQueue, job, 'error', errMsg);
+          this.eventBus.emit(job.type, { status: 'error', desc: errMsg, ...job })
+        }
+
+        if (job.type == "download") {
+          stor.getObject(
+            { ...job, cancelFunc, forceOverwrite: job.forceOverwrite, resumeFrom: job.resumeFrom },
+            (data: any) => {
+              if (data.status == 'error') {
+                this.transferQueue.addFailed(job)
+                updateRecord(this.transferQueue, job, 'error', data.desc);
+                logTransfer('error', `下载失败: ${job.objectName || job.name}`, { desc: data.desc, uid: job.uid });
+              }
+              if (data.status == 'success') {
+                this.transferQueue.addSucceeded(job)
+                updateRecord(this.transferQueue, job, 'success');
+                logTransfer('info', `下载成功: ${job.objectName || job.name}`, { uid: job.uid, localPath: job.localPath });
+              }
+              if (data.status == 'cancel') {
+                updateRecord(this.transferQueue, job, 'cancel', data.desc);
+                logTransfer('warn', `下载取消: ${job.objectName || job.name}`, { uid: job.uid });
+              }
+              this.eventBus.emit('download', {...data, ...job, status: data.status, desc: data.desc})
+            },
+            cancelFunc
+          )
+            .catch(handleError)
+            .finally(() => {
+              this.eventBus.emit('download', { type: "end", ...job })
+              this.transferQueue.done(id)
+              // Clean up cancel mark after job finishes
+              if (job.uid) clearCancel(job.uid);
+            });
+        } else if (job.type == "upload") {
+          stor.putObject(
+            job,
+            (data: any) => {
+              if (data.status == 'error') {
+                this.transferQueue.addFailed(job)
+                updateRecord(this.transferQueue, job, 'error', data.desc);
+                logTransfer('error', `上传失败: ${job.objectName || job.name}`, { desc: data.desc, uid: job.uid });
+              }
+              if (data.status == 'success') {
+                this.transferQueue.addSucceeded(job)
+                updateRecord(this.transferQueue, job, 'success');
+                logTransfer('info', `上传成功: ${job.objectName || job.name}`, { uid: job.uid });
+              }
+              if (data.status == 'cancel') {
+                updateRecord(this.transferQueue, job, 'cancel', data.desc);
+                logTransfer('warn', `上传取消: ${job.objectName || job.name}`, { uid: job.uid });
+              }
+              this.eventBus.emit('upload', {...data, ...job, status: data.status, desc: data.desc})
+            },
+            cancelFunc
+          )
+            .catch(handleError)
+            .finally(() => {
+              this.eventBus.emit('upload', { type: "end", ...job })
+              this.transferQueue.done(id)
+              if (job.uid) clearCancel(job.uid);
+            });
+        }
+      } catch (err: any) {
+        console.error(`[Transfer] sync dispatch error on job #${id}:`, err);
+        this.transferQueue.done(id);
       }
     })
     this.transferQueue.open()
       .then(() => {
+        logTransfer('info', 'SQLite 传输队列数据库打开成功', { dbPath, concurrency: resolveTransferConcurrency() });
         this.transferQueue.start()
         this.flushPendingJobs()
       })
       .catch((error) => {
         console.error('[Transfer] failed to open queue database:', error)
+        logTransfer('error', 'SQLite 传输队列数据库打开失败', { error: error?.message || String(error) });
       })
   }
 
@@ -198,6 +220,11 @@ export class Transfer {
   }
 
   public Add(job: TransferOptions) {
+    logTransfer('info', `Transfer.Add 收到任务: ${job.name || job.objectName}`, {
+      uid: job.uid,
+      isOpen: this.transferQueue.isOpen(),
+      queueLength: this.transferQueue.getLength(),
+    });
     if (!this.transferQueue.isOpen()) {
       this.pendingJobs.push(job);
       this.flushPendingJobs();
@@ -207,10 +234,11 @@ export class Transfer {
   }
 
   private enqueueJob(job: TransferOptions) {
-    this.transferQueue.add(job);
     if (job.record) {
       this.transferQueue.upsertTransferRecord(job.record.uid, job.record);
     }
+    const insertId = this.transferQueue.add(job);
+    logTransfer('info', `任务入队成功 (RowID: ${insertId}): ${job.name || job.objectName}`, { uid: job.uid });
   }
 
   private flushPendingJobs() {

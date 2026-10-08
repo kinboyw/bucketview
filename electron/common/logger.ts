@@ -67,6 +67,42 @@ export const getLogDirectory = () => {
   return logFilePath ? nodePath.dirname(logFilePath) : '';
 };
 
+/**
+ * 读取最近的日志条目，支持最大行数限制
+ */
+export const readRecentLogs = (limit: number = 200): Array<LogEntry> => {
+  ensureInit();
+  // 确保内存中尚未刷盘的日志先同步落盘
+  if (writeQueue.length > 0 && logFilePath) {
+    try {
+      nodeFs.appendFileSync(logFilePath, writeQueue.join(''));
+      writeQueue = [];
+    } catch {}
+  }
+  if (!logFilePath || !nodeFs.existsSync(logFilePath)) return [];
+  try {
+    const content = nodeFs.readFileSync(logFilePath, 'utf8');
+    const lines = content.split(/\r?\n/).filter(line => line.trim().length > 0);
+    const slice = lines.slice(-limit);
+    const parsed: LogEntry[] = [];
+    for (const l of slice) {
+      try {
+        parsed.push(JSON.parse(l));
+      } catch {
+        parsed.push({
+          ts: '',
+          level: 'info',
+          scope: 'raw',
+          message: l,
+        });
+      }
+    }
+    return parsed;
+  } catch {
+    return [];
+  }
+};
+
 export const log = (level: LogLevel, scope: string, message: string, meta?: unknown) => {
   if (levelWeight[level] < levelWeight[minLevel]) return;
   ensureInit();
@@ -83,9 +119,15 @@ export const log = (level: LogLevel, scope: string, message: string, meta?: unkn
     flush();
   }
   const prefix = `[${entry.ts}] [${level.toUpperCase()}] [${scope}] ${message}`;
-  if (level === 'error') console.error(prefix, meta ?? '');
-  else if (level === 'warn') console.warn(prefix, meta ?? '');
-  else console.log(prefix, meta ?? '');
+  try {
+    if (level === 'error') console.error(prefix, meta !== undefined ? JSON.stringify(meta) : '');
+    else if (level === 'warn') console.warn(prefix, meta !== undefined ? JSON.stringify(meta) : '');
+    else console.log(prefix, meta !== undefined ? JSON.stringify(meta) : '');
+  } catch {
+    if (level === 'error') console.error(prefix, meta ?? '');
+    else if (level === 'warn') console.warn(prefix, meta ?? '');
+    else console.log(prefix, meta ?? '');
+  }
 };
 
 export const logger = {
@@ -95,4 +137,5 @@ export const logger = {
   error: (scope: string, message: string, meta?: unknown) => log('error', scope, message, meta),
   getLogFilePath,
   getLogDirectory,
+  readRecentLogs,
 };
