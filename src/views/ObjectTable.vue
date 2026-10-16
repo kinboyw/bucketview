@@ -98,6 +98,47 @@
         <span class="status-item status-selected" v-if="selectedRowKeys.length > 0">
           <CheckSquareOutlined /> 已选 {{ selectedRowKeys.length }}
         </span>
+
+        <!-- 全局实时网络传输速率（含目录导航、文件传输、媒体流） -->
+        <a-popover placement="top" trigger="hover" overlay-class-name="traffic-popover">
+          <template #content>
+            <div class="traffic-detail-card">
+              <div class="traffic-detail-title">网络吞吐 (当前会话)</div>
+              <div class="traffic-detail-grid">
+                <div class="traffic-detail-item">
+                  <span class="detail-label">实时下行 (下载/浏览)</span>
+                  <span class="detail-value down"><ArrowDownOutlined /> {{ formatSpeed(trafficStats.downloadSpeed) }}</span>
+                </div>
+                <div class="traffic-detail-item">
+                  <span class="detail-label">实时上行 (上传/请求)</span>
+                  <span class="detail-value up"><ArrowUpOutlined /> {{ formatSpeed(trafficStats.uploadSpeed) }}</span>
+                </div>
+                <div class="traffic-detail-divider"></div>
+                <div class="traffic-detail-item">
+                  <span class="detail-label">本次下行累计</span>
+                  <span class="detail-value">{{ formatTrafficBytes(trafficStats.totalDownloaded) }}</span>
+                </div>
+                <div class="traffic-detail-item">
+                  <span class="detail-label">本次上行累计</span>
+                  <span class="detail-value">{{ formatTrafficBytes(trafficStats.totalUploaded) }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+          <span
+            class="status-item status-traffic"
+            :class="{
+              active: trafficStats.downloadSpeed > 50 || trafficStats.uploadSpeed > 50,
+            }"
+          >
+            <span class="speed-unit speed-down" :class="{ running: trafficStats.downloadSpeed > 50 }">
+              <ArrowDownOutlined /> {{ formatSpeed(trafficStats.downloadSpeed) }}
+            </span>
+            <span class="speed-unit speed-up" :class="{ running: trafficStats.uploadSpeed > 50 }">
+              <ArrowUpOutlined /> {{ formatSpeed(trafficStats.uploadSpeed) }}
+            </span>
+          </span>
+        </a-popover>
         <template v-if="!isVirtualBucketList && mountStatus !== 'none'">
           <span class="status-item">
             <span
@@ -160,12 +201,15 @@ import {
   nextTick,
   onMounted,
   onUnmounted,
+  reactive,
   ref,
   watch,
   type PropType,
 } from 'vue';
 import type { TableColumnType } from 'ant-design-vue';
 import {
+  ArrowDownOutlined,
+  ArrowUpOutlined,
   CheckSquareOutlined,
   CloudUploadOutlined,
   CodeOutlined,
@@ -204,6 +248,8 @@ export interface BucketMountInfo {
 export default defineComponent({
   name: 'ObjectTable',
   components: {
+    ArrowDownOutlined,
+    ArrowUpOutlined,
     CheckSquareOutlined,
     CloudUploadOutlined,
     DatabaseOutlined,
@@ -483,6 +529,68 @@ export default defineComponent({
     const onDelete = (objectNames: string[]) => emit('delete', objectNames);
     const onCancelLoad = () => emit('cancel-load');
 
+    // ── 全局实时网络流量监控 ──
+    const trafficStats = reactive<{
+      downloadSpeed: number;
+      uploadSpeed: number;
+      totalDownloaded: number;
+      totalUploaded: number;
+      activeSockets: number;
+    }>({
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      totalDownloaded: 0,
+      totalUploaded: 0,
+      activeSockets: 0,
+    });
+
+    let unsubscribeTraffic: (() => void) | null = null;
+
+    onMounted(() => {
+      const storage = (window as any).storage;
+      if (storage?.getTrafficStats) {
+        Object.assign(trafficStats, storage.getTrafficStats());
+      }
+      if (storage?.onTraffic) {
+        unsubscribeTraffic = storage.onTraffic((stats: any) => {
+          if (stats) {
+            Object.assign(trafficStats, stats);
+          }
+        });
+      }
+    });
+
+    onUnmounted(() => {
+      if (unsubscribeTraffic) {
+        unsubscribeTraffic();
+        unsubscribeTraffic = null;
+      }
+    });
+
+    const formatSpeed = (bytes: number) => {
+      if (!bytes || bytes < 50) return '0 B/s';
+      const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+      let val = bytes;
+      let idx = 0;
+      while (val >= 1024 && idx < units.length - 1) {
+        val /= 1024;
+        idx++;
+      }
+      return `${val >= 100 || idx === 0 ? Math.round(val) : val.toFixed(1)} ${units[idx]}`;
+    };
+
+    const formatTrafficBytes = (bytes: number) => {
+      if (!bytes || bytes <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let val = bytes;
+      let idx = 0;
+      while (val >= 1024 && idx < units.length - 1) {
+        val /= 1024;
+        idx++;
+      }
+      return `${val >= 100 || idx === 0 ? Math.round(val) : val.toFixed(2)} ${units[idx]}`;
+    };
+
     return {
       tableWrapperRef,
       customPaginationRef,
@@ -498,6 +606,9 @@ export default defineComponent({
       currentDirectoryTotalSize,
       formatDirectorySize,
       listLoadMode,
+      trafficStats,
+      formatSpeed,
+      formatTrafficBytes,
       onBlankContextMenu,
       onPageChange,
       onPageSizeChange,
@@ -765,6 +876,54 @@ export default defineComponent({
       }
     }
 
+    .status-traffic {
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: var(--ant-color-fill-quaternary);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.2s ease;
+      font-family: Consolas, Monaco, "Courier New", monospace;
+      gap: 6px;
+
+      &:hover {
+        background: var(--ant-color-fill-tertiary);
+        color: var(--ant-color-text);
+      }
+
+      &.active {
+        background: rgba(37, 99, 235, 0.08);
+        border: 1px solid rgba(37, 99, 235, 0.2);
+      }
+
+      .speed-unit {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        color: var(--ant-color-text-tertiary);
+        font-size: 11px;
+        transition: color 0.15s;
+
+        .anticon {
+          font-size: 10px;
+        }
+
+        &.running {
+          font-weight: 600;
+        }
+
+        &.speed-down.running {
+          color: #2563eb;
+          .anticon { color: #2563eb; }
+        }
+
+        &.speed-up.running {
+          color: #16a34a;
+          .anticon { color: #16a34a; }
+        }
+      }
+    }
+
     .status-endpoint,
     .status-scope {
       max-width: 260px;
@@ -959,5 +1118,58 @@ export default defineComponent({
 @keyframes object-table-vfs-flash {
   0% { transform: scale(1.4); opacity: 0.4; }
   100% { transform: scale(1); opacity: 1; }
+}
+
+.traffic-detail-card {
+  padding: 6px 4px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  .traffic-detail-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ant-color-text);
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--ant-color-border-secondary);
+  }
+
+  .traffic-detail-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .traffic-detail-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+
+    .detail-label {
+      color: var(--ant-color-text-secondary);
+    }
+
+    .detail-value {
+      font-weight: 500;
+      font-family: Consolas, Monaco, "Courier New", monospace;
+      color: var(--ant-color-text);
+
+      &.down {
+        color: #2563eb;
+      }
+
+      &.up {
+        color: #16a34a;
+      }
+    }
+  }
+
+  .traffic-detail-divider {
+    height: 1px;
+    background: var(--ant-color-border-secondary);
+    margin: 2px 0;
+  }
 }
 </style>

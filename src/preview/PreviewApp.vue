@@ -24,7 +24,7 @@
 
           <div v-else-if="payload.fileType === 'video'" class="fill-preview media-preview">
             <video-player
-              :key="payload.id"
+              :key="payload.url"
               :src="payload.url"
               :title="payload.title"
               :file-extension="payload.fileExtension"

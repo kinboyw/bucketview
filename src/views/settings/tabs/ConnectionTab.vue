@@ -329,7 +329,58 @@
 
               <div class="form-compact-grid">
                 <a-form-item label="存储桶 (Bucket)" required class="form-compact-item">
-                  <a-input v-model:value="targetForm.bucket" size="small" placeholder="例如: my-bucket" />
+                  <!-- 若连接本身已锁定具体存储桶，直接禁用并继承 -->
+                  <a-input
+                    v-if="selectedConnection?.bucket"
+                    :value="selectedConnection.bucket"
+                    disabled
+                    size="small"
+                  />
+
+                  <!-- 若已扫描到可用存储桶列表：带模糊搜索的下拉选择框 -->
+                  <a-select
+                    v-else-if="targetScannedBuckets.length > 0"
+                    v-model:value="targetForm.bucket"
+                    showSearch
+                    allowClear
+                    placeholder="搜索选择挂载存储桶"
+                    size="small"
+                    :filter-option="filterBucketOption"
+                  >
+                    <template #dropdownRender="{ menuNode }">
+                      <div>
+                        <component :is="menuNode" />
+                        <div class="bucket-dropdown-footer">
+                          <a-button type="link" size="small" :loading="targetScanningBuckets" @click.stop="scanBucketsForTarget">
+                            <ReloadOutlined /> 重新扫描
+                          </a-button>
+                        </div>
+                      </div>
+                    </template>
+                    <a-select-option v-for="b in targetScannedBuckets" :key="b" :value="b">{{ b }}</a-select-option>
+                  </a-select>
+
+                  <!-- 否则显示输入框 + 扫描存储桶按钮 -->
+                  <a-input
+                    v-else
+                    v-model:value="targetForm.bucket"
+                    size="small"
+                    placeholder="输入桶名或点击扫描"
+                    allowClear
+                  >
+                    <template #addonAfter>
+                      <span
+                        class="bucket-scan-addon"
+                        :class="{ loading: targetScanningBuckets }"
+                        @click="scanBucketsForTarget"
+                        title="从当前连接扫描可用存储桶列表"
+                      >
+                        <LoadingOutlined v-if="targetScanningBuckets" />
+                        <SearchOutlined v-else />
+                        <span>{{ targetScanningBuckets ? '扫描中' : '扫描存储桶' }}</span>
+                      </span>
+                    </template>
+                  </a-input>
                 </a-form-item>
 
                 <a-form-item label="挂载盘符 / 路径" required class="form-compact-item">
@@ -536,6 +587,8 @@ export default defineComponent({
     const targetEditing = ref(false);
     const isEditTarget = ref(false);
     const targetSaving = ref(false);
+    const targetScannedBuckets = ref<string[]>([]);
+    const targetScanningBuckets = ref(false);
     const targetForm = reactive<MountTarget>({
       id: '',
       connectionId: '',
@@ -545,6 +598,27 @@ export default defineComponent({
       cacheDirectory: '',
       autoMount: false,
     });
+
+    const scanBucketsForTarget = async () => {
+      const conn = selectedConnection.value;
+      if (!conn || !conn.endpoint || !conn.accessKeyId || !conn.accessKeySecret) return;
+      targetScanningBuckets.value = true;
+      try {
+        const payload = _.cloneDeep(toRaw(conn));
+        const storage = (window as any).storage;
+        if (storage?.changeConfig && storage?.listBuckets) {
+          storage.changeConfig('minio', payload);
+          const list = await storage.listBuckets('minio');
+          if (Array.isArray(list)) {
+            targetScannedBuckets.value = list;
+          }
+        }
+      } catch (e: any) {
+        console.warn('[STORAGE] scanBucketsForTarget error:', e);
+      } finally {
+        targetScanningBuckets.value = false;
+      }
+    };
 
     const startCreateTarget = () => {
       if (!selectedConnection.value) return;
@@ -560,12 +634,19 @@ export default defineComponent({
         cacheDirectory: '',
         autoMount: false,
       });
+      if (!selectedConnection.value.bucket && targetScannedBuckets.value.length === 0) {
+        // 如果当前连接未限制桶，且尚未扫描过，自动触发一次扫描
+        void scanBucketsForTarget();
+      }
     };
 
     const startEditTarget = (target: MountTarget) => {
       targetEditing.value = true;
       isEditTarget.value = true;
       Object.assign(targetForm, _.cloneDeep(toRaw(target)));
+      if (selectedConnection.value && !selectedConnection.value.bucket && targetScannedBuckets.value.length === 0) {
+        void scanBucketsForTarget();
+      }
     };
 
     const cancelTargetEdit = () => {
@@ -668,6 +749,8 @@ export default defineComponent({
     const selectConnection = (id: string) => {
       isCreating.value = false;
       isEditing.value = false;
+      targetEditing.value = false;
+      targetScannedBuckets.value = [];
       emit('selectConnection', id);
     };
 
@@ -770,6 +853,9 @@ export default defineComponent({
       isEditTarget,
       targetSaving,
       targetForm,
+      targetScannedBuckets,
+      targetScanningBuckets,
+      scanBucketsForTarget,
       startCreateTarget,
       startEditTarget,
       cancelTargetEdit,

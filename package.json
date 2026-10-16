@@ -1,7 +1,7 @@
 {
   "name": "bucketview",
   "productName": "BucketView",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "main": "dist-electron/main/index.js",
   "description": "A cross-platform desktop client for S3-compatible object storage.",
   "author": "Kinboy",

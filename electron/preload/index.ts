@@ -20,6 +20,7 @@ import {
 } from './types';
 import { S3Storage } from './storage/s3';
 import { Transfer, markCancel, clearCancel } from './storage/transfer';
+import { trafficMonitor } from './storage/trafficMonitor';
 import { app, dialog, getCurrentWebContents, shell } from '@electron/remote';
 import nodePath from 'node:path';
 import { Fuse } from './storage/fuse';
@@ -114,6 +115,14 @@ contextBridge.exposeInMainWorld('storage', {
   },
   on(event: string, listerner: (...args :any[]) => void){
     eventBus.on(event, listerner)
+  },
+  getTrafficStats() {
+    return trafficMonitor.getStats();
+  },
+  onTraffic(listener: (stats: any) => void) {
+    const handler = (stats: any) => listener(stats);
+    trafficMonitor.on('stats', handler);
+    return () => trafficMonitor.removeListener('stats', handler);
   },
   changeConfig(key: string, connection: Connection): void {
     storages[key]?.changeConfig(connection);

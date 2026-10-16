@@ -131,9 +131,19 @@ export interface Storage {
   deleteDirectory: (prefix: string) => Promise<DeleteObjectResponse>;
 }
 
+export interface TrafficStats {
+  downloadSpeed: number;     // 实时下载速率 (Bytes/s)
+  uploadSpeed: number;       // 实时上传速率 (Bytes/s)
+  totalDownloaded: number;   // 本次会话累计下载 (Bytes)
+  totalUploaded: number;     // 本次会话累计上传 (Bytes)
+  activeSockets: number;     // 活跃网络连接数
+}
+
 export interface PreloadStorage {
   emit: (event: string, ...args: any[]) => void;
   on: (event: string, listener: (...args: any[]) => void) => void;
+  getTrafficStats: () => TrafficStats;
+  onTraffic: (listener: (stats: TrafficStats) => void) => () => void;
   changeConfig: (key: string, connection: Connection) => void;
   setTarget: (key: string, bucket: string, pathPrefix?: string) => void;
   listBuckets: (key: string) => Promise<string[]>;

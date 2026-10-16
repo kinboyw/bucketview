@@ -43,13 +43,24 @@ export default {
   },
   mounted() {
     const isProfessionalFormat = ['mov', 'mxf', 'mkv', 'avi'].includes((this.fileExtension || '').toLowerCase());
+    const mimeTypeMap = {
+      mp4: 'video/mp4',
+      webm: 'video/webm',
+      ogg: 'video/ogg',
+      ogv: 'video/ogg',
+      mov: 'video/mp4',
+      m4v: 'video/mp4',
+    };
+    const ext = (this.fileExtension || '').toLowerCase();
+    const type = mimeTypeMap[ext];
+    const sourceObj = this.src ? (type ? { src: this.src, type } : { src: this.src }) : null;
     const options = {
       autoplay: !isProfessionalFormat,
       controls: true,
       fill: true,
       preload: 'auto',
       controlBar: { fullscreenToggle: true },
-      sources: this.src ? [{ src: this.src }] : [],
+      sources: sourceObj ? [sourceObj] : [],
     };
     this.player = videojs(this.$refs.videoPlayer, options);
     this.player.on('error', () => {
@@ -69,7 +80,17 @@ export default {
     src(nextSrc) {
       if (!this.player || !nextSrc) return;
       this.showMpvPrompt = false;
-      this.player.src({ src: nextSrc });
+      const mimeTypeMap = {
+        mp4: 'video/mp4',
+        webm: 'video/webm',
+        ogg: 'video/ogg',
+        ogv: 'video/ogg',
+        mov: 'video/mp4',
+        m4v: 'video/mp4',
+      };
+      const ext = (this.fileExtension || '').toLowerCase();
+      const type = mimeTypeMap[ext];
+      this.player.src(type ? { src: nextSrc, type } : { src: nextSrc });
       this.player.play()?.catch(() => {
         this.showMpvPrompt = true;
       });

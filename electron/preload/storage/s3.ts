@@ -23,6 +23,7 @@ import { NodeHttpHandler } from "@smithy/node-http-handler";
 import http from 'node:http';
 import https from 'node:https';
 import { ipcRenderer } from 'electron';
+import { trafficMonitor } from './trafficMonitor';
 
 try {
   process.env.AWS_SDK_JS_SUPPRESS_MAINTENANCE_MODE_MESSAGE = '1';
@@ -40,13 +41,13 @@ function getProxyAgent(): { httpAgent?: http.Agent; httpsAgent?: https.Agent } {
   try {
     const { ProxyAgent } = require('proxy-agent');
     return {
-      httpAgent: new ProxyAgent(),
-      httpsAgent: new ProxyAgent(),
+      httpAgent: trafficMonitor.instrumentAgent(new ProxyAgent()),
+      httpsAgent: trafficMonitor.instrumentAgent(new ProxyAgent()),
     };
   } catch {
     return {
-      httpAgent: new http.Agent({ keepAlive: true }),
-      httpsAgent: new https.Agent({ keepAlive: true }),
+      httpAgent: trafficMonitor.instrumentAgent(new http.Agent({ keepAlive: true })),
+      httpsAgent: trafficMonitor.instrumentAgent(new https.Agent({ keepAlive: true })),
     };
   }
 }
@@ -749,7 +750,13 @@ export class S3Storage implements Storage {
   async signObject(objectName: string): Promise<SignObjectResponse> {
     try {
       const { bucket = '' } = this;
-      const command = new GetObjectCommand({ Bucket: bucket, Key: this.resolveKey(objectName) });
+      const key = this.resolveKey(objectName);
+      const contentType = inferContentType(objectName);
+      const command = new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ResponseContentType: contentType,
+      });
       const signedUrl = await getSignedUrl(this.s3Client, command, {
         expiresIn: 24 * 3600,
       });
